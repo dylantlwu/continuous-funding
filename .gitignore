@@ -1,0 +1,22 @@
+# secrets — must never be committed
+.env
+.env.*
+!.env.example
+*.key
+keystore/
+
+# foundry
+out/
+cache/
+broadcast/
+
+# node / frontend
+node_modules/
+.next/
+dist/
+.vercel/
+
+# os / editor
+.DS_Store
+.idea/
+.vscode/

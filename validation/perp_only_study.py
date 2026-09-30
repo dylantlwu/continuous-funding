@@ -9,6 +9,8 @@ Funding is summed over the common window and annualised, so 1h/4h/8h settlement 
     python3 -m validation.perp_only_study --days 30 --control 80
 """
 import argparse
+import concurrent.futures as cf
+import sys
 import datetime as dt
 import os
 import re
@@ -92,22 +94,37 @@ def main():
     results, errors = {}, []
     for g, us in groups.items():
         res = []
-        for u in us:
-            try:
-                r = apr_pair(u, by_perp[u], bg_perp[u], start, end, args.min_days)
-                if r:
-                    res.append(r)
-            except Exception as e:
-                errors.append(f"{u}: {str(e)[:100]}")
-            time.sleep(0.05)
+        with cf.ThreadPoolExecutor(max_workers=8) as ex:
+            futs = {ex.submit(apr_pair, u, by_perp[u], bg_perp[u], start, end, args.min_days): u for u in us}
+            for i, f in enumerate(cf.as_completed(futs), 1):
+                try:
+                    r = f.result()
+                    if r:
+                        res.append(r)
+                except Exception as e:
+                    errors.append(f"{futs[f]}: {str(e)[:100]}")
+                if i % 20 == 0 or i == len(us):
+                    print(f"  {g}: {i}/{len(us)}", file=sys.stderr, flush=True)
         results[g] = res
-    lines += ["| group | coins in group | coins measured | median Bybit − Bitget (APR pts) | mean | share Bybit higher |", "|---|---|---|---|---|---|"]
+    lines += ["| group | coins in group | coins measured | median Bybit − Bitget (APR pts) | mean | share Bybit higher | median funding level (avg of both, APR %) | median Bitget 24h volume (USDT) |", "|---|---|---|---|---|---|---|---|"]
     for g, res in results.items():
         diffs = [r["bybit_apr"] - r["bitget_apr"] for r in res]
         if diffs:
-            lines.append(f"| {g} | {len(groups[g])} | {len(res)} | {statistics.median(diffs):+.2f} | {statistics.mean(diffs):+.2f} | {100*sum(d>0 for d in diffs)/len(diffs):.0f}% |")
+            level = statistics.median([(r["bybit_apr"] + r["bitget_apr"]) / 2 for r in res])
+            vol = statistics.median([bg_vol.get(bg_perp[r["u"]], 0) for r in res])
+            lines.append(f"| {g} | {len(groups[g])} | {len(res)} | {statistics.median(diffs):+.2f} | {statistics.mean(diffs):+.2f} | {100*sum(d>0 for d in diffs)/len(diffs):.0f}% | {level:+.2f} | {vol:,.0f} |")
         else:
-            lines.append(f"| {g} | {len(groups[g])} | 0 | – | – | – |")
+            lines.append(f"| {g} | {len(groups[g])} | 0 | – | – | – | – | – |")
+    # volume-matched comparison: control coins restricted to the treatment group's volume range
+    tr = results.get("treatment (Bybit no spot, Bitget spot)", [])
+    ct = results.get("control (both have spot)", [])
+    if tr and ct:
+        tv = sorted(bg_vol.get(bg_perp[r["u"]], 0) for r in tr)
+        lo_v, hi_v = tv[len(tv) // 10], tv[(9 * len(tv)) // 10]
+        m = [r for r in ct if lo_v <= bg_vol.get(bg_perp[r["u"]], 0) <= hi_v]
+        if m:
+            d = [r["bybit_apr"] - r["bitget_apr"] for r in m]
+            lines.append(f"| control, volume-matched to treatment (10th–90th pct: {lo_v:,.0f}–{hi_v:,.0f}) | – | {len(m)} | {statistics.median(d):+.2f} | {statistics.mean(d):+.2f} | {100*sum(x>0 for x in d)/len(d):.0f}% | – | – |")
     for g, res in results.items():
         lines += ["", f"## {g}: largest gaps", "", "| coin | days | Bybit APR % | Bitget APR % | gap | Bybit interval h | Bitget interval h |", "|---|---|---|---|---|---|---|"]
         for r in sorted(res, key=lambda r: -abs(r["bybit_apr"] - r["bitget_apr"]))[:15]:

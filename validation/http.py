@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import time
+import urllib.error
 import urllib.request
 
 CACHE_DIR = os.path.join(os.path.dirname(__file__), "data", "http_cache")
@@ -34,6 +35,11 @@ def get_json(url, body=None, cache=False, retries=4, timeout=30):
                 with open(path, "w") as f:
                     json.dump(data, f)
             return data
+        except urllib.error.HTTPError as e:
+            if 400 <= e.code < 500:      # definitive answer (unknown symbol, bad request): do not retry
+                raise RuntimeError(f"HTTP {e.code} from {url}") from e
+            last_err = e
+            time.sleep(1.5 * (attempt + 1))
         except Exception as e:  # network errors are retried, then re-raised loudly
             last_err = e
             time.sleep(1.5 * (attempt + 1))

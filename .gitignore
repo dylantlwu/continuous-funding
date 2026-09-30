@@ -20,3 +20,7 @@ dist/
 .DS_Store
 .idea/
 .vscode/
+
+# validation engine: cached exchange data and generated reports
+validation/data/
+validation/reports/

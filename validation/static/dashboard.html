@@ -1,0 +1,245 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Continuous funding · live tracker</title>
+<style>
+.viz-root {
+  color-scheme: light;
+  --page: #f9f9f7; --surface-1: #fcfcfb;
+  --text-primary: #0b0b0b; --text-secondary: #52514e; --text-muted: #898781;
+  --grid: #e1e0d9; --axis: #c3c2b7; --border: rgba(11,11,11,0.10);
+  --good: #006300; --critical: #e34948;
+  --s-ours: #2a78d6; --s-binance: #eb6834; --s-okx: #1baf7a; --s-bybit: #eda100; --s-hyperliquid: #e87ba4; --s-bitget: #008300;
+}
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) .viz-root {
+    color-scheme: dark;
+    --page: #0d0d0d; --surface-1: #1a1a19;
+    --text-primary: #ffffff; --text-secondary: #c3c2b7; --text-muted: #898781;
+    --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
+    --good: #0ca30c; --critical: #e66767;
+    --s-ours: #3987e5; --s-binance: #d95926; --s-okx: #199e70; --s-bybit: #c98500; --s-hyperliquid: #d55181; --s-bitget: #008300;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; }
+.viz-root { background: var(--page); color: var(--text-primary); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; min-height: 100vh; padding: 20px; }
+.wrap { max-width: 1120px; margin: 0 auto; display: grid; gap: 16px; }
+header { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 12px; }
+h1 { font-size: 18px; margin: 0; font-weight: 600; }
+.sub { color: var(--text-secondary); font-size: 13px; }
+.filters { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+select { font: inherit; padding: 6px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-1); color: var(--text-primary); }
+.card { background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px; padding: 16px; min-width: 0; }
+.card h2 { font-size: 14px; margin: 0 0 4px; font-weight: 600; }
+.note { color: var(--text-secondary); font-size: 12px; margin: 0 0 12px; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+.tile .label { color: var(--text-secondary); font-size: 12px; }
+.tile .value { font-size: 30px; font-weight: 600; letter-spacing: -0.01em; }
+.tile .unit { color: var(--text-secondary); font-size: 13px; }
+.legend { display: flex; flex-wrap: wrap; gap: 14px; font-size: 12px; color: var(--text-secondary); margin-bottom: 8px; }
+.legend i { display: inline-block; width: 14px; height: 2px; vertical-align: middle; margin-right: 6px; border-radius: 2px; }
+.chart { position: relative; }
+svg text { fill: var(--text-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.tip { position: absolute; pointer-events: none; background: var(--surface-1); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; font-size: 12px; box-shadow: 0 4px 16px rgba(0,0,0,0.12); display: none; white-space: nowrap; z-index: 2; }
+.row { display: flex; justify-content: space-between; gap: 16px; font-variant-numeric: tabular-nums; }
+.sw { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th { text-align: left; color: var(--text-secondary); font-weight: 500; padding: 6px 8px; border-bottom: 1px solid var(--axis); }
+td { padding: 6px 8px; border-bottom: 1px solid var(--grid); font-variant-numeric: tabular-nums; }
+.num { text-align: right; }
+.ok { color: var(--good); } .bad, .err { color: var(--critical); }
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+@media (max-width: 860px) { .grid2 { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<div class="viz-root">
+<div class="wrap">
+  <header>
+    <div><h1>Continuous funding · live tracker</h1><div class="sub" id="since">Loading…</div></div>
+    <div class="filters">
+      <label class="sub" for="base">Market</label><select id="base"></select>
+      <label class="sub" for="policy">Policy</label><select id="policy"></select>
+    </div>
+  </header>
+  <div class="err" id="error"></div>
+  <section class="tiles">
+    <div class="card tile"><div class="label">Our funding rate now (what users pay)</div>
+      <div><span class="value" id="t-rate">–</span> <span class="unit">bp / hour</span></div><div class="sub" id="t-apr">–</div></div>
+    <div class="card tile"><div class="label">Venue consensus (median of current predictions)</div>
+      <div><span class="value" id="t-cons">–</span> <span class="unit">bp / hour</span></div><div class="sub">each venue's prediction ÷ its settlement interval</div></div>
+    <div class="card tile"><div class="label">True-up correction included</div>
+      <div><span class="value" id="t-corr">–</span> <span class="unit">bp / hour</span></div><div class="sub">catch-up for prediction changes and carried residuals</div></div>
+  </section>
+  <section class="card">
+    <h2>Cumulative funding per unit notional since recording started</h2>
+    <p class="note">Positive = longs pay shorts. Venues pay in steps at their own settlement times; we accrue every minute. Equal heights at a venue's settlement = nothing to arbitrage against us on that venue.</p>
+    <div class="legend" id="legend1"></div>
+    <div class="chart" id="chart1"></div>
+  </section>
+  <div class="grid2">
+    <section class="card">
+      <h2>Current rate per hour</h2>
+      <p class="note">Each venue's live prediction normalised to one hour, next to what we charge now.</p>
+      <div class="chart" id="chart2"></div>
+    </section>
+    <section class="card">
+      <h2>Tracking at each settlement</h2>
+      <p class="note">Venue paid in the period minus what we charged over the same period, in bp of notional. This is what a hedged trader could extract.</p>
+      <table><thead><tr><th>Venue</th><th>Settled (local time)</th><th class="num">Gap</th></tr></thead><tbody id="track"></tbody></table>
+    </section>
+  </div>
+  <section class="card">
+    <h2>Venues</h2>
+    <table><thead><tr><th>Venue</th><th>Symbol</th><th class="num">Prediction per period</th><th class="num">Interval</th><th>Next settlement</th><th class="num">bp / hour</th><th>Feed</th></tr></thead><tbody id="venues"></tbody></table>
+  </section>
+</div>
+</div>
+<script>
+// All text goes in through textContent / createTextNode; no HTML strings are parsed.
+const VENUES = ["binance", "okx", "bybit", "hyperliquid", "bitget"];
+const NAMES = {ours: "Ours", binance: "Binance", okx: "OKX", bybit: "Bybit", hyperliquid: "Hyperliquid", bitget: "Bitget"};
+const SVGNS = "http://www.w3.org/2000/svg";
+const color = k => `var(--s-${k})`;
+const $ = id => document.getElementById(id);
+const fmt = (x, d = 4) => (x === null || x === undefined || Number.isNaN(x)) ? "–" : (x >= 0 ? "+" : "") + x.toFixed(d);
+const tloc = ms => new Date(ms).toLocaleString([], {month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit"});
+function h(tag, attrs = {}, ...kids) {
+  const el = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) k === "style" ? el.setAttribute("style", v) : k === "class" ? (el.className = v) : el.setAttribute(k, v);
+  for (const c of kids) el.append(c instanceof Node ? c : document.createTextNode(String(c)));
+  return el;
+}
+function s(tag, attrs = {}, text) {
+  const el = document.createElementNS(SVGNS, tag);
+  for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v);
+  if (text !== undefined) el.textContent = String(text);
+  return el;
+}
+const swatch = k => h("span", {class: "sw", style: `background:${color(k)}`});
+
+async function init() {
+  const m = await (await fetch("/api/markets")).json();
+  for (const b of m.bases) $("base").add(new Option(b, b));
+  const pn = {median: "Median of venues", midrange: "Midrange of venues", anchor_binance: "Anchor: Binance"};
+  for (const p of m.policies) $("policy").add(new Option(pn[p] || p, p));
+  $("base").onchange = $("policy").onchange = load;
+  load(); setInterval(load, 60000);
+}
+
+async function load() {
+  const st = await (await fetch(`/api/state?base=${encodeURIComponent($("base").value)}&policy=${encodeURIComponent($("policy").value)}`)).json();
+  $("error").textContent = st.error || "";
+  if (st.recording_since_ms) $("since").textContent = `Recording since ${tloc(st.recording_since_ms)} · updated ${tloc(st.now_ms)} · refreshes every minute`;
+  if (!st.ours) return;
+  $("t-rate").textContent = fmt(st.ours.rate_per_h_bp);
+  $("t-apr").textContent = st.ours.apr_pct === null ? "–" : `${fmt(st.ours.apr_pct, 2)}% APR (simple)`;
+  $("t-cons").textContent = fmt(st.ours.consensus_per_h_bp);
+  $("t-corr").textContent = fmt(st.ours.correction_per_h_bp);
+  lastState = st;
+  drawCumulative(st); drawRates(st); fillTables(st);
+}
+let lastState = null, rafId = 0;
+// charts are sized from their container; redraw whenever the container changes size
+const ro = new ResizeObserver(() => { cancelAnimationFrame(rafId); rafId = requestAnimationFrame(() => { if (lastState && lastState.ours) { drawCumulative(lastState); drawRates(lastState); } }); });
+function timeTicks(t0, t1, maxN) {
+  const steps = [1, 2, 5, 10, 15, 30, 60, 120, 240, 480, 720, 1440].map(m => m * 60000);
+  const step = steps.find(s => (t1 - t0) / s <= maxN) || steps.at(-1);
+  const off = new Date().getTimezoneOffset() * 60000, out = [];
+  for (let t = Math.ceil((t0 - off) / step) * step + off; t <= t1; t += step) out.push(t);
+  return out;
+}
+
+const lin = (d0, d1, r0, r1) => x => r0 + (x - d0) * (r1 - r0) / ((d1 - d0) || 1);
+function ticks(lo, hi, n) {
+  const step0 = (hi - lo || 1) / n, p = Math.pow(10, Math.floor(Math.log10(step0)));
+  const step = [1, 2, 5, 10].map(k => k * p).find(v => v >= step0), out = [];
+  for (let v = Math.ceil(lo / step) * step; v <= hi + 1e-12; v += step) out.push(+v.toFixed(10));
+  return out;
+}
+
+function drawCumulative(st) {
+  const el = $("chart1"), W = el.clientWidth || 900, H = 300, m = {l: 60, r: 56, t: 10, b: 26};
+  const t0 = st.recording_since_ms, t1 = st.now_ms, series = [];
+  for (const v of VENUES) {
+    const x = st.venues[v]; if (!x) continue;
+    const pts = [[t0, 0]]; let prev = 0;
+    for (const [t, c] of x.steps) { pts.push([t, prev], [t, c]); prev = c; }
+    pts.push([t1, prev]); series.push({k: v, pts});
+  }
+  series.push({k: "ours", pts: [[t0, 0], ...st.ours.cum]});
+  const ys = series.flatMap(x => x.pts.map(p => p[1]));
+  let lo = Math.min(0, ...ys), hi = Math.max(0, ...ys); const pad = (hi - lo) * 0.08 || 0.01; lo -= pad; hi += pad;
+  const X = lin(t0, t1, m.l, W - m.r), Y = lin(lo, hi, H - m.b, m.t);
+  const svg = s("svg", {width: W, height: H, role: "img", "aria-label": "Cumulative funding: venues step at settlement, ours accrues every minute"});
+  for (const v of ticks(lo, hi, 5)) {
+    svg.append(s("line", {x1: m.l, x2: W - m.r, y1: Y(v), y2: Y(v), stroke: "var(--grid)"}));
+    svg.append(s("text", {x: m.l - 8, y: Y(v) + 4, "text-anchor": "end"}, v.toFixed(3)));
+  }
+  svg.append(s("line", {x1: m.l, x2: W - m.r, y1: Y(0), y2: Y(0), stroke: "var(--axis)"}));
+  svg.append(s("text", {x: 4, y: m.t + 4}, "bp"));
+  for (const t of timeTicks(t0, t1, Math.max(2, Math.floor((W - m.l - m.r) / 90)))) if (t >= t0 && t <= t1) svg.append(s("text", {x: X(t), y: H - 8, "text-anchor": "middle"}, new Date(t).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"})));
+  for (const ser of series) {
+    const d = ser.pts.map((p, i) => `${i ? "L" : "M"}${X(p[0]).toFixed(1)},${Y(p[1]).toFixed(1)}`).join("");
+    svg.append(s("path", {d, fill: "none", stroke: color(ser.k), "stroke-width": 2, "stroke-linejoin": "round", "stroke-linecap": "round"}));
+  }
+  const o = series.at(-1).pts.at(-1);
+  svg.append(s("text", {x: X(o[0]) + 6, y: Y(o[1]) + 4, style: "fill:var(--text-primary);font-weight:600"}, "Ours"));
+  const xh = s("line", {y1: m.t, y2: H - m.b, stroke: "var(--axis)", style: "display:none"});
+  const hit = s("rect", {x: m.l, y: m.t, width: W - m.l - m.r, height: H - m.t - m.b, fill: "transparent"});
+  svg.append(xh, hit);
+  const tip = h("div", {class: "tip"});
+  el.replaceChildren(svg, tip);
+  $("legend1").replaceChildren(...["ours", ...VENUES.filter(v => st.venues[v])].map(k => h("span", {}, h("i", {style: `background:${color(k)}`}), NAMES[k])));
+  const valAt = (pts, t) => { let v = pts[0][1]; for (const p of pts) { if (p[0] <= t) v = p[1]; else break; } return v; };
+  hit.addEventListener("mousemove", e => {
+    const r = el.getBoundingClientRect(), px = e.clientX - r.left, t = t0 + (px - m.l) / (W - m.l - m.r) * (t1 - t0);
+    xh.setAttribute("x1", px); xh.setAttribute("x2", px); xh.style.display = "";
+    tip.replaceChildren(h("div", {class: "sub"}, tloc(t)), ...series.slice().reverse().map(sr => h("div", {class: "row"}, h("span", {}, swatch(sr.k), NAMES[sr.k]), h("span", {}, `${fmt(valAt(sr.pts, t))} bp`))));
+    tip.style.display = "block"; tip.style.left = Math.min(px + 14, W - 210) + "px"; tip.style.top = "12px";
+  });
+  hit.addEventListener("mouseleave", () => { tip.style.display = "none"; xh.style.display = "none"; });
+}
+
+function drawRates(st) {
+  const el = $("chart2"), W = el.clientWidth || 480;
+  const rows = [{k: "ours", v: st.ours.rate_per_h_bp}, ...VENUES.filter(v => st.venues[v]).map(v => ({k: v, v: st.venues[v].pred_per_h_bp}))];
+  const rowH = 30, H = rows.length * rowH + 16, m = {l: 96, r: 72};
+  const vals = rows.map(r => r.v || 0); let lo = Math.min(0, ...vals), hi = Math.max(0, ...vals); if (lo === hi) hi = lo + 0.01;
+  const X = lin(lo, hi, m.l, W - m.r);
+  const svg = s("svg", {width: W, height: H, role: "img", "aria-label": "Current funding rate per hour by venue and ours"});
+  svg.append(s("line", {x1: X(0), x2: X(0), y1: 4, y2: H - 8, stroke: "var(--axis)"}));
+  rows.forEach((r, i) => {
+    const y = 8 + i * rowH, x0 = X(Math.min(0, r.v || 0)), w = Math.max(2, Math.abs(X(r.v || 0) - X(0)));
+    svg.append(s("text", {x: m.l - 10, y: y + 15, "text-anchor": "end", style: r.k === "ours" ? "fill:var(--text-primary);font-weight:600" : "fill:var(--text-secondary)"}, NAMES[r.k]));
+    const bar = s("rect", {x: x0, y: y + 4, width: w, height: 16, rx: 4, fill: color(r.k)});
+    bar.append(s("title", {}, `${NAMES[r.k]}: ${fmt(r.v)} bp/hour`));
+    svg.append(bar);
+    svg.append(s("text", {x: Math.max(X(r.v || 0), X(0)) + 6, y: y + 16, style: "fill:var(--text-secondary)"}, fmt(r.v)));
+  });
+  el.replaceChildren(svg);
+}
+
+function fillTables(st) {
+  const now = st.now_ms;
+  $("venues").replaceChildren(...VENUES.filter(v => st.venues[v]).map(v => {
+    const x = st.venues[v], hh = (st.health || {})[v] || {}, age = Math.round((now - hh.last_poll_ms) / 1000);
+    const fresh = hh.ok && age < 180, mins = Math.round((x.next_ms - now) / 60000);
+    return h("tr", {}, h("td", {}, swatch(v), NAMES[v]), h("td", {}, x.symbol), h("td", {class: "num"}, `${fmt(x.pred * 1e4)} bp`),
+      h("td", {class: "num"}, `${x.interval_h ?? "–"} h`), h("td", {}, `${tloc(x.next_ms)} (in ${mins} min)`), h("td", {class: "num"}, fmt(x.pred_per_h_bp)),
+      h("td", {class: fresh ? "ok" : "bad"}, `${fresh ? "✓ live" : "✕ stale"} · ${hh.latency_ms ?? "–"} ms · ${age}s ago`));
+  }));
+  const rows = [];
+  for (const v of VENUES) for (const [t, gap] of (st.tracking_error_bp[v] || [])) rows.push({v, t, gap});
+  rows.sort((a, b) => b.t - a.t);
+  $("track").replaceChildren(...(rows.length ? rows.slice(0, 14).map(r => h("tr", {}, h("td", {}, swatch(r.v), NAMES[r.v]), h("td", {}, tloc(r.t)), h("td", {class: "num"}, `${fmt(r.gap)} bp`)))
+    : [h("tr", {}, h("td", {colspan: 3, class: "sub"}, "No settlement since recording started yet."))]));
+}
+init();
+ro.observe($("chart1")); ro.observe($("chart2"));
+</script>
+</body>
+</html>

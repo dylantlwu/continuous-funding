@@ -5,7 +5,7 @@ much each venue revises its prediction near settlement) we must record them as t
 
     nohup python3 -m validation.recorder --every 60 >> validation/data/recorder.log 2>&1 &
 
-Storage: validation/data/live.sqlite (gitignored)
+Storage: $RECORDER_DB, default validation/data/live.sqlite (gitignored). On Railway: /data/live.sqlite on a volume.
   polls(ts_ms, venue, ok, rows, latency_ms, error)       one row per venue per round: tells "no change" from "no data"
   snapshots(ts_ms, venue, base, symbol, rate, next_ms, interval_h)   written only when rate or next settlement changes
 Fields checked against live responses on 2026-09-30. Binance lastFundingRate equals Hyperliquid's 'BinPerp'
@@ -21,7 +21,7 @@ import time
 from .http import get_json
 from .perp_only_study import underlying
 
-DB = os.path.join(os.path.dirname(__file__), "data", "live.sqlite")
+DB = os.environ.get("RECORDER_DB") or os.path.join(os.path.dirname(__file__), "data", "live.sqlite")
 
 
 def _binance(state):

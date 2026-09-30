@@ -13,7 +13,7 @@ import os
 import time
 
 from . import arb, binance_recon, tracker
-from .venues import SETTLED, VENUES, binance_params, binance_premium_1m
+from .venues import SETTLED, VENUES, binance_params, binance_premium_1m, binance_settled
 
 DAY_MS = 86_400_000
 BOUNDARY = 480  # minutes; 00/08/16 UTC settle on every venue we use, so windows cut here have no partial periods
@@ -39,23 +39,30 @@ def build_policies(base, settled, anchor):
         if v == "binance":
             prem = binance_premium_1m(base, rows[0][0] * 60_000, rows[-1][0] * 60_000)
             interest, cap = binance_params(base)
+            regular, special = binance_settled(base, rows[0][0] * 60_000, rows[-1][0] * 60_000, split=True)
+            # forecast quality is judged on regular settlements only; specials are listed, then charged via true-up
+            r = binance_recon.validate(binance_recon.build_periods(regular, prem, interest_8h=interest, cap=cap))
+            for m, rate in special:
+                notes.append(f"**Binance Special funding** at minute {m} ({dt.datetime.utcfromtimestamp(m*60):%Y-%m-%d %H:%M} UTC): {rate:+.6f}; not forecastable, recovered by true-up")
             periods = binance_recon.build_periods(rows, prem, interest_8h=interest, cap=cap)
             if any(not p.get("pred") for p in periods):
                 raise RuntimeError(f"{base}: Binance periods without premium data")
-            r = binance_recon.validate(periods)
             notes.append(f"Binance live-prediction rebuild vs settlement (interest {interest:.4%}/8h, cap {cap}): {r['periods']} periods, mean |err| {r['mean_abs_bp']:.3f} bp, max {r['max_abs_bp']:.3f} bp")
             per_venue[v] = tracker.track(periods)
         else:
             per_venue[v] = tracker.track(tracker.lagged_periods(rows))
+    pols = {}
     if anchor not in per_venue:
-        raise RuntimeError(f"{base}: anchor {anchor} not available")
-    pols = {f"anchor_{anchor}": per_venue[anchor]}
-    if anchor == "binance":
-        pols["anchor_binance_lagged"] = tracker.track(tracker.lagged_periods(settled["binance"]))
+        notes.append(f"**anchor {anchor} does not list {base}; anchor policy skipped**")
     else:
-        notes.append(f"anchor {anchor}: only settled history is available, so its tracker uses last-settled as the prediction")
+        pols[f"anchor_{anchor}"] = per_venue[anchor]
+        if anchor == "binance":
+            pols["anchor_binance_lagged"] = tracker.track(tracker.lagged_periods(settled["binance"]))
+        else:
+            notes.append(f"anchor {anchor}: only settled history is available, so its tracker uses last-settled as the prediction")
     if len(per_venue) >= 3:
         pols[f"median_{len(per_venue)}"] = tracker.combine(per_venue, "median")
+    if len(per_venue) >= 2:
         pols[f"midrange_{len(per_venue)}"] = tracker.combine(per_venue, "midrange")
     return pols, notes
 

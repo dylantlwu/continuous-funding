@@ -87,3 +87,14 @@ class BinanceReconTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class VenueDedupeTests(unittest.TestCase):
+    def test_two_records_in_same_minute_are_summed_not_dropped(self):
+        # Without this, Binance's 'Special' funding one second after the regular one silently replaces it (real case: NVDA 2026-09-10).
+        from validation.venues import _dedupe_sorted
+        t = 1_790_000_000_000 - 1_790_000_000_000 % 60_000
+        rows = [(t, 3.877e-5), (t + 1000, -1.11667e-3), (t, 3.877e-5)]   # regular, special, and a duplicate page copy
+        out = _dedupe_sorted(rows, t - 60_000, t + 60_000)
+        self.assertEqual(len(out), 1)
+        self.assertAlmostEqual(out[0][1], 3.877e-5 - 1.11667e-3, places=12)

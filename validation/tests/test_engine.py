@@ -98,3 +98,13 @@ class VenueDedupeTests(unittest.TestCase):
         out = _dedupe_sorted(rows, t - 60_000, t + 60_000)
         self.assertEqual(len(out), 1)
         self.assertAlmostEqual(out[0][1], 3.877e-5 - 1.11667e-3, places=12)
+
+
+class RevisionTests(unittest.TestCase):
+    def test_value_at_uses_value_in_force_not_next_one(self):
+        # Without this, the revision study would read a prediction that was not yet published (look-ahead) and understate revisions.
+        from validation.revisions import value_at
+        s = [(1000, 1e-4), (5000, 2e-4)]
+        self.assertIsNone(value_at(s, 999))
+        self.assertEqual(value_at(s, 4999), 1e-4)
+        self.assertEqual(value_at(s, 5000), 2e-4)

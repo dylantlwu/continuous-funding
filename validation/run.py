@@ -34,6 +34,12 @@ def fetch(base, start, end):
 
 
 def build_policies(base, settled, anchor):
+    per_venue, notes = venue_trackers(base, settled)
+    return policies_from(per_venue, settled, anchor, base, notes)
+
+
+def venue_trackers(base, settled):
+    """Per-venue true-up tracker: {venue: {minute: rate charged that minute}}, plus notes."""
     notes, per_venue = [], {}
     for v, rows in settled.items():
         if v == "binance":
@@ -51,6 +57,10 @@ def build_policies(base, settled, anchor):
             per_venue[v] = tracker.track(periods)
         else:
             per_venue[v] = tracker.track(tracker.lagged_periods(rows))
+    return per_venue, notes
+
+
+def policies_from(per_venue, settled, anchor, base, notes):
     pols = {}
     if anchor not in per_venue:
         notes.append(f"**anchor {anchor} does not list {base}; anchor policy skipped**")

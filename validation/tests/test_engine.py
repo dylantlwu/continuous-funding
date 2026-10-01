@@ -108,3 +108,42 @@ class RevisionTests(unittest.TestCase):
         self.assertIsNone(value_at(s, 999))
         self.assertEqual(value_at(s, 4999), 1e-4)
         self.assertEqual(value_at(s, 5000), 2e-4)
+
+
+class VaultSimTests(unittest.TestCase):
+    P = None
+
+    def setUp(self):
+        from validation import vault_sim
+        self.vs = vault_sim
+        self.P = dict(vault_sim.PARAMS, arb_threshold_apr=1e9)       # arbitrage off unless a test turns it on
+
+    def _run(self, kind, crowd, prices, cons, venue_rate, P=None):
+        hours = list(range(len(prices)))
+        venue_h = {"x": {h: venue_rate for h in hours}}
+        return self.vs.simulate(hours, prices, cons, venue_h, crowd, kind, P or self.P)
+
+    def test_crowd_long_and_positive_rate_pays_the_vault(self):
+        # Without this, a sign error would show the vault earning when it should pay (or vice versa) and invert every conclusion.
+        r = 0.0001
+        o = self._run("parity", [10.0] * 5, [100.0] * 5, [r] * 5, r)
+        self.assertAlmostEqual(o["fund"], r * 10 * 100 * 4, places=12)
+        self.assertEqual(o["dir"], 0.0)
+
+    def test_price_up_with_crowd_long_costs_the_vault(self):
+        # Without this, the vault's directional exposure (the dominant risk) could be booked with the wrong sign.
+        o = self._run("parity", [10.0, 10.0], [100.0, 110.0], [0.0, 0.0], 0.0)
+        self.assertAlmostEqual(o["dir"], -100.0, places=9)
+
+    def test_arbitrageur_goes_long_when_venue_pays_more_and_adds_to_skew(self):
+        # Without this, arbitrage could be simulated in the wrong direction, so "arb extracted" and skew effects would be meaningless.
+        P = dict(self.P, arb_threshold_apr=0.01, arb_capacity=5.0)
+        gap = 0.10 / self.vs.APR                                      # venue 10% APR above our rate: 5x the threshold
+        o = self._run("parity", [0.0, 0.0], [100.0, 100.0], [0.0, 0.0], gap, P)
+        self.assertGreater(o["arb"], 0.0)
+        self.assertAlmostEqual(o["abs_skew"][0], 5.0)                # full capacity, long on our venue
+
+    def test_hybrid_premium_never_leaves_the_band(self):
+        # Without this, the band that caps how far we deviate from the market (and so what arbitrage can take) could silently fail.
+        o = self._run("hybrid", [500.0] * 200, [100.0] * 200, [0.0] * 200, 0.0)
+        self.assertLessEqual(max(o["dev"]), self.P["hybrid_band_apr"] + 1e-12)

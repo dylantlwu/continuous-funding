@@ -116,7 +116,7 @@ class VaultSimTests(unittest.TestCase):
     def setUp(self):
         from validation import vault_sim
         self.vs = vault_sim
-        self.P = dict(vault_sim.PARAMS, arb_threshold_apr=1e9)       # arbitrage off unless a test turns it on
+        self.P = dict(vault_sim.PARAMS, arb_model="simple", arb_threshold_apr=1e9)   # arbitrage off unless a test turns it on
 
     def _run(self, kind, crowd, prices, cons, venue_rate, P=None):
         hours = list(range(len(prices)))
@@ -147,3 +147,64 @@ class VaultSimTests(unittest.TestCase):
         # Without this, the band that caps how far we deviate from the market (and so what arbitrage can take) could silently fail.
         o = self._run("hybrid", [500.0] * 200, [100.0] * 200, [0.0] * 200, 0.0)
         self.assertLessEqual(max(o["dev"]), self.P["hybrid_band_apr"] + 1e-12)
+
+
+
+class ArbBooksTests(unittest.TestCase):
+    def setUp(self):
+        from validation import vault_sim
+        self.vs = vault_sim
+        self.P = dict(vault_sim.PARAMS, arb_model="books", arb_capacity=10.0, ema_half_life_h=0.01)  # EMA ~ instant
+
+    def _run(self, venue_rates, n=200, cons=0.0, settle=None, P=None, shares=None):
+        hours = list(range(n))
+        vh = {v: {h: (r(h) if callable(r) else r) for h in hours} for v, r in venue_rates.items()}
+        ctx = {"shares": shares or {v: 1.0 / len(vh) for v in vh}, "settle": settle or {}}
+        return self.vs.simulate(hours, [100.0] * n, [cons] * n, vh, [0.0] * n, "parity", P or self.P, ctx)
+
+    def test_books_take_opposite_sides_and_mostly_cancel(self):
+        # Without this, the model could again push all arbitrage capital to one side (the overshoot we are fixing).
+        g = 0.10 / self.vs.APR
+        o = self._run({"hi": g, "lo": -g})
+        self.assertGreater(o["books"]["hi"], 4.0)          # long us / short the high-paying venue
+        self.assertLess(o["books"]["lo"], -4.0)            # short us / long the low-paying venue
+        self.assertAlmostEqual(o["books"]["hi"] + o["books"]["lo"], 0.0, places=6)
+
+    def test_partial_adjustment_moves_only_part_way_each_hour(self):
+        # Without this, positions would jump to target instantly and the model would be as jumpy as the old one.
+        g = 1.0 / self.vs.APR                               # huge edge: full-size target
+        o = self._run({"x": g}, n=2)                        # exactly one simulated hour
+        self.assertAlmostEqual(o["books"]["x"], self.P["adjust_per_h"] * 10.0, places=9)
+
+    def test_hysteresis_keeps_a_position_between_exit_and_entry_threshold(self):
+        # Without this, a gap that shrinks a little would make arbitrageurs dump and rebuild, i.e. hourly flipping.
+        entry, exit_, _ = self.vs.arb_thresholds(self.P)
+        big, mid = 3 * entry, 0.75 * entry                  # mid is above exit, below entry
+        held = self._run({"x": lambda h: big if h < 100 else mid}, n=300)
+        fresh = self._run({"x": mid}, n=300)
+        self.assertGreater(held["books"]["x"], 0.5)         # still holding
+        self.assertAlmostEqual(fresh["books"]["x"], 0.0, places=9)   # a newcomer would not enter at this gap
+
+    def test_costs_make_net_below_gross_and_venue_leg_paid_only_at_settlement(self):
+        # Without this, the arbitrage figure would ignore trading costs and the venue's snapshot settlement timing.
+        g = 0.20 / self.vs.APR
+        rate8h = g * 8
+        settle = {"x": {h: rate8h for h in range(8, 200, 8)}}
+        o = self._run({"x": g}, settle=settle)
+        self.assertGreater(o["fees"], 0.0)
+        self.assertLess(o["arb_net"], o["arb"])
+        none = self._run({"x": g}, settle={"x": {}})
+        self.assertLess(none["arb"], o["arb"])              # without settlements the venue leg pays nothing
+
+
+class ArbBooksReversalTests(unittest.TestCase):
+    def test_book_can_reverse_after_the_gap_flips(self):
+        # Without this, a book closing by partial steps never reaches exactly zero and can never reverse
+        # (a real bug found 2026-10-01: arbitrage stayed stuck at ~0 while our rate sat 40 points above market).
+        from validation import vault_sim as vs
+        P = dict(vs.PARAMS, arb_model="books", arb_capacity=10.0, ema_half_life_h=0.01)
+        g = 0.10 / vs.APR
+        hours = list(range(400))
+        vh = {"x": {h: (g if h < 100 else -g) for h in hours}}
+        o = vs.simulate(hours, [100.0] * 400, [0.0] * 400, vh, [0.0] * 400, "parity", P, {"shares": {"x": 1.0}, "settle": {}})
+        self.assertLess(o["books"]["x"], -4.0)

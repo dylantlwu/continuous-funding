@@ -34,7 +34,7 @@ PARAMS = {
     "cubic_k_apr": 0.25,            # LeverUp-style: rate = k * u^3 (their doc example: u=0.8 -> 12.8%)
     "velocity_apr_per_h": 0.02,     # SIP-279 / hybrid: rate moves this much per hour at full imbalance
     "velocity_cap_apr": 0.50,       # SIP-279-style cap
-    "hybrid_band_apr": 0.10,        # hybrid: |p| <= w around consensus
+    "hybrid_band_apr": 0.05,        # hybrid: |p| <= w around consensus (owner decision 2026-10-01)
     "seed": 7,
     # arbitrage model. "books" (default): one book per venue, can hold opposite sides at once, partial
     # adjustment, entry/exit hysteresis, costs, venue leg paid only at that venue's settlements.
@@ -307,6 +307,7 @@ def main():
     ap.add_argument("--paths", type=int, default=0, help="Monte Carlo price paths (0 = historical path only)")
     ap.add_argument("--sweep", action="store_true", help="also sweep the hybrid band w and arbitrage capacity (uses --paths, default 100)")
     ap.add_argument("--arb-model", choices=("books", "simple"), default=PARAMS["arb_model"])
+    ap.add_argument("--shares", help="freeze arbitrage capacity split, e.g. binance=0.387,bybit=0.230,... (default: live open interest)")
     args = ap.parse_args()
     P = dict(PARAMS, arb_model=args.arb_model)
     end = int(time.time() * 1000)
@@ -322,7 +323,11 @@ def main():
     prices = [px[h] for h in hours]
     cons = [statistics.median(vh[v][h] for v in vh) for h in hours]
     crowd = crowd_scenarios(prices, random.Random(P["seed"]))
-    shares = venue_oi_shares(args.base)
+    if args.shares:
+        shares = {k: float(v) for k, v in (kv.split("=") for kv in args.shares.split(","))}
+        notes.append("capacity split frozen from --shares (reproducible run)")
+    else:
+        shares = venue_oi_shares(args.base)
     if set(shares) != set(vh):
         notes.append(f"open interest unavailable for {sorted(set(vh) - set(shares))}: those venues get no arbitrage capacity")
     ctx = {"shares": shares,

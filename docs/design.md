@@ -1,9 +1,8 @@
 # Design: vault-protecting funding on Monad
 
-Status: draft v2 for owner review (2026-10-01). v2 fixes the issues raised by two independent
-reviews of v1 (one clock instead of two, the free oracle option, liquidations blocked by global checks,
-LP run risk, feed liveness). Nothing here is implemented yet except the off-chain validation engine,
-recorder and simulation under `validation/`.
+Status: v2 (2026-10-01), implemented in `src/` (2026-10-03) with the tests listed in §11. Not deployed
+yet. v2 fixes the issues raised by two independent reviews of v1 (one clock instead of two, the free
+oracle option, liquidations blocked by global checks, LP run risk, feed liveness).
 
 ## 1. What this is
 
@@ -23,15 +22,16 @@ imbalance rate (Synthetix V2, GMX V2, LeverUp) starts from a level unrelated to 
 hedged traders initially take the wrong side. Anchoring to `c` makes `p` a clean inventory signal.
 
 What funding does **not** do: it does not defend against fast, toxic flow. At 5% APR, `p` is about
-1.4 bp per day; a momentum trader does not notice it. Toxic flow is handled by the skew cap (§8),
+1.4 bp per day; a momentum trader does not notice it. Toxic flow is handled by the capacity rule (§8),
 trading fees and tight oracle freshness (§7), not by funding.
 
 Evidence so far (simulation, not proof): `validation/vault_sim.py` replays September 2026 BTC prices
 and real funding from five venues. All four crowd scenarios must be reported together: compared with
 `rate = c`, the hybrid lowered the standard deviation of vault PnL by 82% under persistent one-sided
 demand, 18% under a shock, 6% under noise, and not at all under momentum. In that run the modelled
-arbitrageurs lost money net of costs, so the next simulation makes arbitrage capacity respond to
-arbitrage profit (open item, §10).
+arbitrageurs lost money net of costs, which is why the vault's position shrank: these numbers are
+**not a claim** until arbitrage capacity responds to arbitrage profit and the run is reproducible from
+the repository with a fixed window and a committed data snapshot (open items, §10).
 
 ## 2. Prior art (what is not new)
 
@@ -60,7 +60,8 @@ No proxies, no governance, no token. The `owner` can pause new opens and rotate 
 ## 4. Units, precision and types
 
 Mixing units is a likelier bug than mixing margins, so units are types too (Solidity user-defined
-value types, no implicit conversion):
+value types, no implicit conversion; this stops *accidental* mixing, a deliberate `wrap`/`unwrap` still
+compiles and is easy to grep for):
 
 | Type | Meaning |
 |---|---|
@@ -110,12 +111,14 @@ p = p(dt); lastTime = now
 ```
 
 Because `p` and accrual use the same clock and closed-form integrals, touching the market more or less
-often cannot change what is owed (T3). Several blocks share one second on Monad; within a second
+often cannot change what is owed beyond rounding dust, **at a given price** (T3). Several blocks share one second on Monad; within a second
 `dt = 0`, nothing accrues and `p` does not move. The honest wording is **"re-evaluated every block,
 accrued per second"**.
 
 `lastPrice` is the price at the last touch; between touches a pull oracle has no price. The error is
-second-order (rate × price change × time) and is disclosed.
+rate × price change × time: negligible when the market is touched often, not negligible after a long
+quiet stretch with a large move (for example about 0.6% of notional after a week at 100% APR with a 30%
+move). Anyone can `poke` with a fresh price to keep it small; disclosed.
 
 ### 5.3 Position funding and the vault
 
@@ -129,95 +132,124 @@ bounded and always in the vault's favour (not a tautology from computing one sid
 
 ### 5.4 Consensus feed (`c`)
 
-The relayer computes, every minute, each venue's live predicted funding normalised to per second, and
-posts the median with the five raw values in an event.
+The relayer reads, every minute, each venue's live predicted funding normalised to per second, and posts
+the five values. **The median is computed on-chain** (`medianOf`, public), so the relayer cannot post a
+free number: every input it reports is public and attributable to a venue.
 
-`post(market, ratePerSec, observedAt, venueRates[5])`:
+`post(market, observedAt, venueRates[5])`:
 - reverts if `msg.sender != relayer`, if `observedAt` is not newer than the last post, is in the future,
-  or is more than 2 minutes old;
-- **clamps** (does not revert) `ratePerSec` to ±`cMax` and to `previous ± maxStep`, emitting
-  `ConsensusClamped`. Rejecting would make the feed go stale exactly in a squeeze, when venue rates
-  can exceed any cap (Binance's BTC cap is 0.3% per 8h, about 330% APR);
+  or is more than 2 minutes old, or if a post already landed in this second;
+- takes the median of the venues present (a venue can be marked missing; at least 3 are required;
+  an even count averages the middle two, rounded toward zero);
+- **clamps** (does not revert) the median to ±`cMax`, and the change to at most `maxStep` per post AND
+  at most `maxSlewPerSec` × seconds since the last post; `c` starts at 0. Emits `Clamped`. Rejecting
+  would make the feed go stale exactly in a squeeze, when venue rates can exceed any cap (Binance's BTC
+  cap is 0.3% per 8h, about 330% APR);
 - updates the cumulative integral at the post's own `block.timestamp`, never at `observedAt`, so a post
   cannot rewrite time already accrued.
 
-Proposed bounds (owner decision, §10): `cMax` 100% APR, `maxStep` 5% APR per post (±100% reachable in
-20 minutes, publicly). The trust gap is disclosed: one relayer key. Mitigations: public raw inputs,
-owner pause and key rotation. Most venues do not serve the history of their *predicted* funding, so
-the recorder's minute-by-minute data is archived publicly; that archive is what lets anyone recompute
-`c` afterwards. After the hackathon: several posters with an on-chain median, or oracle-signed venue
-funding.
+Bounds (owner, 2026-10-03): `cMax` 100% APR, `maxStep` 5% APR per post, slew 5% APR per minute, so
+±100% takes at least 20 minutes from 0, publicly, whatever the relayer does. The trust gap is
+disclosed: one relayer key, and `c` (up to ±100% APR) is much larger than the on-chain `p` (±5%). The
+relayer can misreport venue values; it cannot hide that it did. Mitigations: on-chain median of logged
+inputs, the slew bound, owner pause and key rotation. Most venues do not serve the history of their
+*predicted* funding, so the recorder's minute-by-minute data is archived publicly; that archive is what
+lets anyone check each reported value afterwards. After the hackathon: several posters, or
+oracle-signed venue funding.
 
-If no post arrives for 5 minutes, `c` stays frozen at its last value (no jump) and the owner may pause
-new opens. Closes and liquidations are never blocked by the feed.
+If no post arrives for 5 minutes, `c` stays frozen at its last value (no jump) and new opens pause.
+Closes and liquidations are never blocked by the feed.
 
 ## 6. Margin: two types that cannot be mixed
 
 | Type | Meaning | Changes when |
 |---|---|---|
-| `MarginStatic` | Collateral the trader actually deposited into the position | open, close, add margin; realised funding at those events |
+| `MarginStatic` | Collateral the trader actually deposited into the position | open, add margin; settled at close or liquidation |
 | `MarginDynamic` | Margin required at the current price: initial = notional / maxLeverage, maintenance = notional × mmr | every price change |
 
 No conversion function exists. They meet only in `canOpen(...)` and `isLiquidatable(...)`, which use
 integer arithmetic without division. Test T4 compiles a file that assigns one to the other and
-asserts the compiler error. Provisional parameters: 10x max leverage, 5% maintenance margin.
+asserts the compiler error. Parameters: 10x max leverage, 5% maintenance margin.
 
 ## 7. Prices, trading and liquidation
 
-**Closing the free oracle option.** With a pull oracle the caller chooses which signed price to submit.
-Left open, a trader can pick the stale stored price or a fresh one, whichever pays, and a liquidator
-can pick a wick. Rules:
-- each market stores the last used `publishTime`; a submitted price must not be older than it;
-- prices for opens and closes must be at most 3 seconds old; for liquidations at most 10 seconds old;
-- an open and close fee (proposed 5 bp of notional, to the vault) makes residual picking unprofitable;
+**Narrowing and pricing the free oracle option.** With a pull oracle the caller chooses which signed
+price to submit. Left open, a trader can pick the stale stored price or a fresh one, whichever pays, and
+a liquidator can pick a wick. The option cannot be removed without a two-step (request, then execute at
+a later price) flow; v1 narrows it and makes it cost money:
+- each market stores the last used `publishTime`; a submitted price must not be older than it (through
+  Pyth this is already true, since Pyth never stores an older price over a newer one);
+- every price, for trades and liquidations alike, must be at most 3 seconds old (owner, 2026-10-03:
+  liquidators get no wider window than traders);
+- trades execute at the oracle price moved by its confidence interval **against the trader**: buying
+  (open long, close short) at price + conf, selling at price − conf. A spread that widens exactly when
+  the oracle is unsure, which is when picking a stale print would pay;
+- an open and close fee (5 bp of notional, to the vault);
 - liquidation checks health at the confidence-adjusted price in the trader's favour (long: price + conf,
   short: price − conf), so a wide-confidence wick cannot liquidate a healthy position.
+
+What remains: in a fast market where a 3-second move exceeds about 10 bp plus twice the confidence
+interval, opening on a print up to 3 s old and closing on the latest one still pays. Disclosed.
 
 Tight freshness windows are practical because Monad includes a transaction within about a second;
 on slower chains a 3-second window would make normal trades fail. This is the most concrete "why
 Monad" in the design.
 
+Positions must be at least 0.001 BTC, so no dust position can sit unliquidatable and block the owner's
+withdrawal.
+
 **Fail loud, without freezing risk reduction.**
 - A liquidation **reverts** if the price is zero, older than allowed, older than the last used price,
   or the position does not exist; and with `NotLiquidatable` if `deposit + pnl − fundingOwed ≥
   maintenance` at the trader-favourable price. It never substitutes a default price.
-- Global problems (feed stale, vault cash below a threshold) **pause new opens only**. Closes and
-  liquidations always work, because they reduce risk.
+- Global problems (feed stale, owner pause, vault capacity, §8) **pause new opens only**. Closes and
+  liquidations always work, because they reduce risk. One exception, disclosed: if the vault's cash
+  cannot pay a winning trader, the close reverts with `VaultInsolvent` rather than paying less silently
+  (owner, 2026-10-03). §8's capacity rule is what keeps this out of reach.
 - When a liquidation leaves negative equity, the vault absorbs it and emits `Shortfall(account, amount)`.
   No insurance fund and no auto-deleveraging in v1; the shortfall ledger is explicit.
 
-Liquidation is permissionless. Proposed fee 0.5% of notional to the liquidator, the rest of any
-remaining equity to the vault.
+Liquidation is permissionless. The liquidator receives 0.5% of notional, paid by the vault even when the
+trader's equity cannot cover it (so underwater positions still get liquidated; the uncovered part is in
+the `Shortfall`). Any remaining equity goes to the vault.
 
 ## 8. Vault risk limits
 
 - v1 vault is seeded by the owner; there are no LP shares, so nobody can withdraw ahead of traders'
-  realised profits (a withdrawal at cash value would let LPs exit before losses land).
-- Open-interest cap and skew cap (`|skew| <= skewCap`); trades that would exceed them revert, trades
-  that reduce skew are always allowed. The skew cap, not funding, is the defence against toxic flow.
-- Known cost of a skew cap: a hedged participant can occupy it for about `w` APR and crowd others out;
-  disclosed, mitigated by keeping `w` small relative to the fee.
+  realised profits (a withdrawal at cash value would let LPs exit before losses land). The owner can
+  withdraw only when open interest is zero.
+- **Capacity rule (owner, 2026-10-03).** Every open must leave the vault solvent after a 25% adverse
+  move with the *larger side* unhedged, net of the unrealised profit it already owes traders:
+  `max(longOI, shortOI) × price × 25% ≤ vaultCash − max(0, unrealised trader PnL)`.
+  The larger side, not today's skew, because closes can never be blocked: if one side leaves, the skew
+  becomes the other side. A per-trade skew cap does not work for the same reason (an independent audit
+  showed it could be walked to 10× its value by opening hedge legs and closing them). With a 1,000,000
+  vault at 100,000 per BTC this is 40 BTC per side. Funding owed is not counted (small, disclosed).
+- Trades that reduce the larger side are always allowed; the capacity rule, not funding, is the
+  defence against toxic flow. Known cost: a hedged participant can occupy capacity for about `w` APR and
+  crowd others out; disclosed, mitigated by keeping `w` small relative to the fee.
 
 ## 9. Gas on Monad
 
 Monad charges the gas **limit**. The frontend sends fixed per-function limits from
 `forge test --gas-report` plus a small margin. Every call touches one market; accrual is O(1).
 
-Measured with a mock price source (so **excluding** Pyth's signature verification, which must be
-measured on testnet with real update payloads before the limits are fixed), max over the test runs:
-`open` 285,918 · `close` 192,523 · `liquidate` 214,350 · `poke` 141,749 · `addMargin` 53,897.
+Measured by `forge test --gas-report` with mock price sources (so **excluding** Pyth's signature
+verification, which must be measured on testnet with real update payloads before the limits are
+fixed), max over all test runs: `open` 433,540 · `close` 199,019 · `liquidate` 220,675 · `poke` 180,242 ·
+`addMargin` 53,809 · feed `post` 80,696.
 
-## 10. Open decisions (owner)
+## 10. Decisions
 
-1. Feed bounds: `cMax` 100% APR and `maxStep` 5% APR per post?
-2. Fees: open/close 5 bp; liquidation 0.5% of notional to the liquidator?
-3. `skewScale`, skew cap and open-interest cap for the demo (simulation used 100 BTC as scale).
-4. Scope cuts for a 6-day build (both reviewers): owner-seeded vault without LP shares; BTC only (ETH
-   later); no partial close, no remove-margin; owner pause instead of a reduce-only state machine.
-5. The fail-loud rule as refined in §7: position-level data problems revert; global problems only pause
-   opens and never block closes or liquidations.
-6. Simulation before claims: make arbitrage capacity respond to arbitrage profit, sweep `w` and costs,
-   compare against the velocity-only rule as well as `rate = c`.
+Decided by the owner (2026-10-01 to 10-03): `w` 5% APR; velocity 2% APR per hour at full imbalance;
+Pyth; the feed bounds and on-chain median (§5.4); the rounding rule (§4); the capacity rule at 25%
+(§8); `VaultInsolvent` kept and disclosed; execution at price ± conf; one 3-second price window;
+minimum size 0.001 BTC; liquidation reward paid by the vault, remaining equity to the vault.
+
+Still provisional: fees (5 bp open/close, 0.5% liquidation); `skewScale` for the demo; scope cuts
+(owner-seeded vault without LP shares, BTC only, no partial close, no remove-margin, owner pause instead
+of a reduce-only state machine); and simulation before claims (arbitrage capacity that responds to
+arbitrage profit, `w` and cost sweeps, comparison with the velocity-only rule and `rate = c`).
 
 ## 11. Tests (each with a one-line "what bug this would miss")
 
@@ -228,12 +260,13 @@ measured on testnet with real update payloads before the limits are fixed), max 
 | T3 | Touching the market at arbitrary times (with feed posts in between) leaves the final index unchanged. |
 | T4 | A file mixing `MarginStatic`/`MarginDynamic` (and one mixing `Usdc`/`UsdWad`) fails to compile; the script asserts the compiler errors. |
 | T5 | Fuzz: healthy positions cannot be liquidated, at any price within the allowed age and confidence; clearly unhealthy ones can (so a contract that never liquidates fails). Plus one position exactly at the boundary. |
-| T6 | Zero, stale, older-than-last and missing data revert; global problems do not block closes or liquidations. |
+| T6 | Zero, stale, older-than-last and missing data revert; global problems do not block closes or liquidations; dust below the minimum size cannot be opened. |
 | T7 | Fuzz: `|p| <= w`; `p` moves at most `V × dt`. |
 | T8 | Extreme sizes and prices: no overflow; rounding always against the trader. |
-| T9 | Feed: unauthorised, out-of-order, future or too-old posts revert; out-of-range values are clamped; the integral switches at the post's timestamp. |
+| T9 | Feed: unauthorised, out-of-order, future, too-old or same-second posts revert; the applied rate is the on-chain median; out-of-range values are clamped; the bound holds over time (5% APR per minute), not just per post; the integral switches at the post's timestamp. |
 | T10 | Golden vectors: the Python reference and the contract produce the same funding for a recorded scenario. |
-| T11 | Oracle option: a trade with a price older than 3 s or older than the last used price reverts. |
+| T11 | Oracle option: any price older than 3 s or older than the last used price reverts, for liquidations too; trades execute at price ± conf against the trader. |
+| T12 | Vault capacity: open interest cannot be stacked on one side by opening and closing hedge legs; capacity is net of unrealised profit already owed. |
 
 ## 12. Deliberately not doing
 

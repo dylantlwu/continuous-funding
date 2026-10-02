@@ -18,13 +18,33 @@ type MarginDynamic is uint256;
 using {_addUsdc as +, _subUsdc as -, _ltUsdc as <, _gtUsdc as >} for Usdc global;
 using {_addWad as +, _subWad as -, _ltWad as <} for UsdWad global;
 
-function _addUsdc(Usdc a, Usdc b) pure returns (Usdc) { return Usdc.wrap(Usdc.unwrap(a) + Usdc.unwrap(b)); }
-function _subUsdc(Usdc a, Usdc b) pure returns (Usdc) { return Usdc.wrap(Usdc.unwrap(a) - Usdc.unwrap(b)); }
-function _ltUsdc(Usdc a, Usdc b) pure returns (bool) { return Usdc.unwrap(a) < Usdc.unwrap(b); }
-function _gtUsdc(Usdc a, Usdc b) pure returns (bool) { return Usdc.unwrap(a) > Usdc.unwrap(b); }
-function _addWad(UsdWad a, UsdWad b) pure returns (UsdWad) { return UsdWad.wrap(UsdWad.unwrap(a) + UsdWad.unwrap(b)); }
-function _subWad(UsdWad a, UsdWad b) pure returns (UsdWad) { return UsdWad.wrap(UsdWad.unwrap(a) - UsdWad.unwrap(b)); }
-function _ltWad(UsdWad a, UsdWad b) pure returns (bool) { return UsdWad.unwrap(a) < UsdWad.unwrap(b); }
+function _addUsdc(Usdc a, Usdc b) pure returns (Usdc) {
+    return Usdc.wrap(Usdc.unwrap(a) + Usdc.unwrap(b));
+}
+
+function _subUsdc(Usdc a, Usdc b) pure returns (Usdc) {
+    return Usdc.wrap(Usdc.unwrap(a) - Usdc.unwrap(b));
+}
+
+function _ltUsdc(Usdc a, Usdc b) pure returns (bool) {
+    return Usdc.unwrap(a) < Usdc.unwrap(b);
+}
+
+function _gtUsdc(Usdc a, Usdc b) pure returns (bool) {
+    return Usdc.unwrap(a) > Usdc.unwrap(b);
+}
+
+function _addWad(UsdWad a, UsdWad b) pure returns (UsdWad) {
+    return UsdWad.wrap(UsdWad.unwrap(a) + UsdWad.unwrap(b));
+}
+
+function _subWad(UsdWad a, UsdWad b) pure returns (UsdWad) {
+    return UsdWad.wrap(UsdWad.unwrap(a) - UsdWad.unwrap(b));
+}
+
+function _ltWad(UsdWad a, UsdWad b) pure returns (bool) {
+    return UsdWad.unwrap(a) < UsdWad.unwrap(b);
+}
 
 /// Conversions. There is deliberately NO function between MarginStatic and MarginDynamic:
 /// mixing "what the trader put in" with "what the position needs" is a production bug class
@@ -98,7 +118,8 @@ library Margin {
         pure
         returns (bool)
     {
-        int256 equity = UsdWad.unwrap(Units.staticWad(deposited)) + UsdWad.unwrap(pnl) - UsdWad.unwrap(fundingOwed);
+        int256 equity =
+            UsdWad.unwrap(Units.staticWad(deposited)) + UsdWad.unwrap(pnl) - UsdWad.unwrap(fundingOwed);
         return equity < UsdWad.unwrap(Units.dynamicWad(maintenance));
     }
 }

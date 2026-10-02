@@ -22,25 +22,24 @@ contract PerpEngine is ReentrancyGuard {
     using SafeERC20 for IERC20;
 
     struct Params {
-        int256 w;                       // |p| <= w, per second, 1e18
-        int256 velocity;                // dp/dt at full imbalance, per second^2, 1e18
-        uint256 skewScale;              // |skew| at which imbalance is "full" (base units, 1e18)
-        uint256 skewCap;                // opens may not push |skew| above this, unless they reduce it
-        uint256 oiCap;                  // opens may not push longOI + shortOI above this
-        uint256 initialMarginRate;      // of notional, 1e18 (0.1e18 = 10x)
-        uint256 maintenanceMarginRate;  // of notional, 1e18
-        uint256 tradeFeeRate;           // of notional, open and close, to the vault, 1e18
-        uint256 liquidationFeeRate;     // of notional, to the liquidator, 1e18
-        uint256 maxOpenConfRate;        // opens revert if conf > price * this, 1e18
-        uint64 maxTradePriceAge;        // seconds
-        uint64 maxLiquidationPriceAge;  // seconds
+        int256 w; // |p| <= w, per second, 1e18
+        int256 velocity; // dp/dt at full imbalance, per second^2, 1e18
+        uint256 skewScale; // |skew| at which imbalance is "full" (base units, 1e18)
+        uint256 stressMove; // opens must leave the vault solvent after this adverse move, 1e18
+        uint256 minSize; // smallest position (base units, 1e18)
+        uint256 initialMarginRate; // of notional, 1e18 (0.1e18 = 10x)
+        uint256 maintenanceMarginRate; // of notional, 1e18
+        uint256 tradeFeeRate; // of notional, open and close, to the vault, 1e18
+        uint256 liquidationFeeRate; // of notional, to the liquidator, 1e18
+        uint256 maxOpenConfRate; // opens revert if conf > price * this, 1e18
+        uint64 maxPriceAge; // seconds, for every call that uses a price
     }
 
     struct Position {
-        int256 size;           // base units, 1e18; positive = long
-        MarginStatic deposit;  // what the trader put in (after the open fee)
-        int256 entryIndex;     // fundingIndex at open
-        uint256 entryPrice;    // 1e18
+        int256 size; // base units, 1e18; positive = long
+        MarginStatic deposit; // what the trader put in (after the open fee)
+        int256 entryIndex; // fundingIndex at open
+        uint256 entryPrice; // execution price at open, 1e18
     }
 
     uint256 private constant WAD = 1e18;
@@ -54,25 +53,25 @@ contract PerpEngine is ReentrancyGuard {
     int256 public immutable w;
     int256 public immutable velocity;
     uint256 public immutable skewScale;
-    uint256 public immutable skewCap;
-    uint256 public immutable oiCap;
+    uint256 public immutable stressMove;
+    uint256 public immutable minSize;
     uint256 public immutable initialMarginRate;
     uint256 public immutable maintenanceMarginRate;
     uint256 public immutable tradeFeeRate;
     uint256 public immutable liquidationFeeRate;
     uint256 public immutable maxOpenConfRate;
-    uint64 public immutable maxTradePriceAge;
-    uint64 public immutable maxLiquidationPriceAge;
+    uint64 public immutable maxPriceAge;
 
     // market state
     uint256 public longOI;
     uint256 public shortOI;
-    int256 public premium;          // p at lastTime
+    int256 public premium; // p at lastTime
     uint64 public lastTime;
-    int256 public fundingIndex;     // cumulative funding per base unit, USD 1e18
-    uint256 public lastPrice;       // price at the last touch, prices the next accrual interval
-    int256 public cCumAtLast;       // feed.cumulative() read at lastTime
-    uint64 public lastPublishTime;  // newest oracle publish time used; prices may not go back
+    int256 public fundingIndex; // cumulative funding per base unit, USD 1e18
+    uint256 public lastPrice; // price at the last touch, prices the next accrual interval
+    int256 public cCumAtLast; // feed.cumulative() read at lastTime
+    uint64 public lastPublishTime; // newest oracle publish time used; prices may not go back
+    int256 public entryNotional; // sum over positions of size x entryPrice (USD 1e18): unrealised PnL basis
 
     Usdc public vaultCash;
     bool public opensPaused;
@@ -80,7 +79,9 @@ contract PerpEngine is ReentrancyGuard {
 
     event MarketUpdated(uint64 time, int256 premium, int256 fundingIndex, uint256 price, int256 consensusRate);
     event Opened(address indexed account, int256 size, uint256 price, Usdc deposit, Usdc fee);
-    event Closed(address indexed account, int256 size, uint256 price, UsdWad pnl, UsdWad funding, Usdc fee, Usdc payout);
+    event Closed(
+        address indexed account, int256 size, uint256 price, UsdWad pnl, UsdWad funding, Usdc fee, Usdc payout
+    );
     event Liquidated(
         address indexed account, address indexed liquidator, int256 size, uint256 price, uint256 conf, Usdc reward
     );
@@ -99,8 +100,8 @@ contract PerpEngine is ReentrancyGuard {
     error PriceOlderThanLast(uint64 publishTime, uint64 last);
     error PriceTooOld(uint64 publishTime, uint64 maxAge);
     error ConfidenceTooWide(uint256 price, uint256 conf);
-    error OiCapExceeded(uint256 oi, uint256 cap);
-    error SkewCapExceeded(int256 skew, uint256 cap);
+    error VaultCapacityExceeded(UsdWad stressLoss, UsdWad available);
+    error BelowMinSize(uint256 size, uint256 minSize);
     error MarginBelowFee(Usdc margin, Usdc fee);
     error InsufficientMargin(MarginStatic deposit, MarginDynamic required);
     error NotLiquidatable(UsdWad equity, MarginDynamic maintenance);
@@ -119,15 +120,14 @@ contract PerpEngine is ReentrancyGuard {
         w = p.w;
         velocity = p.velocity;
         skewScale = p.skewScale;
-        skewCap = p.skewCap;
-        oiCap = p.oiCap;
+        stressMove = p.stressMove;
+        minSize = p.minSize;
         initialMarginRate = p.initialMarginRate;
         maintenanceMarginRate = p.maintenanceMarginRate;
         tradeFeeRate = p.tradeFeeRate;
         liquidationFeeRate = p.liquidationFeeRate;
         maxOpenConfRate = p.maxOpenConfRate;
-        maxTradePriceAge = p.maxTradePriceAge;
-        maxLiquidationPriceAge = p.maxLiquidationPriceAge;
+        maxPriceAge = p.maxPriceAge;
         lastTime = uint64(block.timestamp);
         cCumAtLast = feed_.cumulative(feedMarket_);
     }
@@ -142,21 +142,25 @@ contract PerpEngine is ReentrancyGuard {
         Position storage pos = positions[msg.sender];
         if (pos.size != 0) revert PositionExists();
 
-        (uint256 price, uint256 conf, uint256 oracleFee) = _readPrice(priceUpdate, maxTradePriceAge);
+        if (_abs(size) < minSize) revert BelowMinSize(_abs(size), minSize);
+        (uint256 price, uint256 conf, uint256 oracleFee) = _readPrice(priceUpdate);
         if (conf * WAD > price * maxOpenConfRate) revert ConfidenceTooWide(price, conf);
         _touch(price);
 
-        _addOpenInterest(size);
-        (MarginStatic deposit, Usdc fee) = _depositAfterFee(_abs(size), price, margin);
-
+        uint256 exec = _execPrice(price, conf, size > 0);
+        (MarginStatic deposit, Usdc fee) = _depositAfterFee(_abs(size), exec, margin);
+        if (size > 0) longOI += uint256(size);
+        else shortOI += uint256(-size);
         pos.size = size;
         pos.deposit = deposit;
         pos.entryIndex = fundingIndex;
-        pos.entryPrice = price;
+        pos.entryPrice = exec;
+        entryNotional += _entryTerm(size, exec);
         vaultCash = vaultCash + fee;
+        _requireVaultCapacity(price);
 
         usdc.safeTransferFrom(msg.sender, address(this), Usdc.unwrap(margin));
-        emit Opened(msg.sender, size, price, Units.cash(deposit), fee);
+        emit Opened(msg.sender, size, exec, Units.cash(deposit), fee);
         _refund(oracleFee);
     }
 
@@ -164,11 +168,12 @@ contract PerpEngine is ReentrancyGuard {
     function close(bytes[] calldata priceUpdate) external payable nonReentrant {
         Position memory pos = positions[msg.sender];
         if (pos.size == 0) revert NoPosition();
-        (uint256 price,, uint256 oracleFee) = _readPrice(priceUpdate, maxTradePriceAge);
+        (uint256 price, uint256 conf, uint256 oracleFee) = _readPrice(priceUpdate);
         _touch(price);
 
-        (UsdWad pnl, UsdWad funding) = _pnlAndFunding(pos, price);
-        int256 notional = _notionalUp(_abs(pos.size), price);
+        uint256 exec = _execPrice(price, conf, pos.size < 0);
+        (UsdWad pnl, UsdWad funding) = _pnlAndFunding(pos, exec);
+        int256 notional = _notionalUp(_abs(pos.size), exec);
         UsdWad feeWad = UsdWad.wrap(WadMath.mulDivCeil(notional, SafeCast.toInt(tradeFeeRate), WAD));
         UsdWad equity = Units.staticWad(pos.deposit) + pnl - funding - feeWad;
         Usdc payout = UsdWad.unwrap(equity) > 0 ? Units.toUsdcDown(equity) : Usdc.wrap(0);
@@ -178,7 +183,7 @@ contract PerpEngine is ReentrancyGuard {
         if (UsdWad.unwrap(equity) < 0) emit Shortfall(msg.sender, UsdWad.wrap(-UsdWad.unwrap(equity)));
 
         if (Usdc.unwrap(payout) > 0) usdc.safeTransfer(msg.sender, Usdc.unwrap(payout));
-        emit Closed(msg.sender, pos.size, price, pnl, funding, Units.toUsdcUp(feeWad), payout);
+        emit Closed(msg.sender, pos.size, exec, pnl, funding, Units.toUsdcUp(feeWad), payout);
         _refund(oracleFee);
     }
 
@@ -196,7 +201,7 @@ contract PerpEngine is ReentrancyGuard {
     function liquidate(address account, bytes[] calldata priceUpdate) external payable nonReentrant {
         Position memory pos = positions[account];
         if (pos.size == 0) revert NoPosition();
-        (uint256 price, uint256 conf, uint256 oracleFee) = _readPrice(priceUpdate, maxLiquidationPriceAge);
+        (uint256 price, uint256 conf, uint256 oracleFee) = _readPrice(priceUpdate);
         if (pos.size < 0 && conf >= price) revert ConfidenceTooWide(price, conf);
         _touch(price);
 
@@ -205,7 +210,9 @@ contract PerpEngine is ReentrancyGuard {
         if (!liquidatable) revert NotLiquidatable(equity, maintenance);
 
         Usdc reward = Units.toUsdcDown(
-            UsdWad.wrap(WadMath.mulDivFloor(_notionalDown(_abs(pos.size), checkPrice), SafeCast.toInt(liquidationFeeRate), WAD))
+            UsdWad.wrap(
+                WadMath.mulDivFloor(_notionalDown(_abs(pos.size), checkPrice), SafeCast.toInt(liquidationFeeRate), WAD)
+            )
         );
         UsdWad left = equity - Units.toWad(reward);
 
@@ -220,7 +227,7 @@ contract PerpEngine is ReentrancyGuard {
 
     /// Anyone may bring the market up to date with a fresh price (keeps the accrual price recent).
     function poke(bytes[] calldata priceUpdate) external payable nonReentrant {
-        (uint256 price,, uint256 oracleFee) = _readPrice(priceUpdate, maxTradePriceAge);
+        (uint256 price,, uint256 oracleFee) = _readPrice(priceUpdate);
         _touch(price);
         _refund(oracleFee);
     }
@@ -285,7 +292,8 @@ contract PerpEngine is ReentrancyGuard {
         int256 funding = WadMath.mulDivCeil(pos.size, index - pos.entryIndex, WAD);
         int256 num = WadMath.mulDivFloor(pos.size, SafeCast.toInt(pos.entryPrice), WAD)
             - UsdWad.unwrap(Units.staticWad(pos.deposit)) + funding;
-        int256 den = pos.size - WadMath.mulDivFloor(SafeCast.toInt(_abs(pos.size)), SafeCast.toInt(maintenanceMarginRate), WAD);
+        int256 den =
+            pos.size - WadMath.mulDivFloor(SafeCast.toInt(_abs(pos.size)), SafeCast.toInt(maintenanceMarginRate), WAD);
         if (den == 0) return 0;
         int256 px = WadMath.mulDivFloor(num, int256(WAD), uint256(den > 0 ? den : -den));
         if (den < 0) px = -px;
@@ -323,10 +331,7 @@ contract PerpEngine is ReentrancyGuard {
         return velocity * k / scale;
     }
 
-    function _readPrice(bytes[] calldata update, uint64 maxAge)
-        internal
-        returns (uint256 price, uint256 conf, uint256 oracleFee)
-    {
+    function _readPrice(bytes[] calldata update) internal returns (uint256 price, uint256 conf, uint256 oracleFee) {
         oracleFee = priceSource.updateFee(update);
         if (msg.value < oracleFee) revert InsufficientOracleFee(msg.value, oracleFee);
         uint64 publishTime;
@@ -334,20 +339,35 @@ contract PerpEngine is ReentrancyGuard {
         if (price == 0) revert ZeroPrice(); // the adapter checks too; never value a position at zero
         if (publishTime < lastPublishTime) revert PriceOlderThanLast(publishTime, lastPublishTime);
         // a publish time slightly ahead of block.timestamp (clock skew) counts as age 0
-        if (block.timestamp > publishTime && block.timestamp - publishTime > maxAge) {
-            revert PriceTooOld(publishTime, maxAge);
+        if (block.timestamp > publishTime && block.timestamp - publishTime > maxPriceAge) {
+            revert PriceTooOld(publishTime, maxPriceAge);
         }
         lastPublishTime = publishTime;
     }
 
-    /// Caps apply to opens only. A trade that reduces |skew| is allowed even above the skew cap.
-    function _addOpenInterest(int256 size) internal {
-        int256 oldSkew = skew();
-        if (size > 0) longOI += uint256(size);
-        else shortOI += uint256(-size);
-        if (longOI + shortOI > oiCap) revert OiCapExceeded(longOI + shortOI, oiCap);
-        int256 newSkew = skew();
-        if (_abs(newSkew) > skewCap && _abs(newSkew) >= _abs(oldSkew)) revert SkewCapExceeded(newSkew, skewCap);
+    /// Opens only. After the open, the vault must stay solvent through an adverse move of `stressMove` with
+    /// the LARGER side unhedged (closes are never blocked, so the other side may leave at any time), net of
+    /// the unrealised profit it already owes traders. Funding owed is not counted (small, disclosed).
+    function _requireVaultCapacity(uint256 price) internal view {
+        uint256 maxSide = longOI > shortOI ? longOI : shortOI;
+        int256 stress = WadMath.mulDivCeil(_notionalUp(maxSide, price), SafeCast.toInt(stressMove), WAD);
+        int256 owed = WadMath.mulDivCeil(skew(), SafeCast.toInt(price), WAD) - entryNotional;
+        int256 available = UsdWad.unwrap(Units.toWad(vaultCash)) - (owed > 0 ? owed : int256(0));
+        if (available < stress) revert VaultCapacityExceeded(UsdWad.wrap(stress), UsdWad.wrap(available));
+    }
+
+    /// Trades execute at the oracle price moved by its confidence AGAINST the trader: buying (open long,
+    /// close short) at price + conf, selling at price - conf. A spread that widens when the oracle is unsure,
+    /// which is when picking a stale print inside the age window would pay.
+    function _execPrice(uint256 price, uint256 conf, bool buy) internal pure returns (uint256) {
+        if (buy) return price + conf;
+        if (conf >= price) revert ConfidenceTooWide(price, conf);
+        return price - conf;
+    }
+
+    /// One position's term in `entryNotional`. Same inputs on open and removal, so it cancels exactly.
+    function _entryTerm(int256 size, uint256 entryPrice) internal pure returns (int256) {
+        return WadMath.mulDivFloor(size, SafeCast.toInt(entryPrice), WAD);
     }
 
     /// Open fee first, then the rest must cover initial margin (both rounded against the trader).
@@ -376,7 +396,9 @@ contract PerpEngine is ReentrancyGuard {
             UsdWad.wrap(WadMath.mulDivCeil(pos.size, SafeCast.toInt(price) - SafeCast.toInt(pos.entryPrice), WAD));
         UsdWad funding = UsdWad.wrap(WadMath.mulDivFloor(pos.size, fundingIndex - pos.entryIndex, WAD));
         maintenance = Units.requiredDown(
-            UsdWad.wrap(WadMath.mulDivFloor(_notionalDown(_abs(pos.size), price), SafeCast.toInt(maintenanceMarginRate), WAD))
+            UsdWad.wrap(
+                WadMath.mulDivFloor(_notionalDown(_abs(pos.size), price), SafeCast.toInt(maintenanceMarginRate), WAD)
+            )
         );
         equity = Units.staticWad(pos.deposit) + pnl - funding;
         liquidatable = Margin.isLiquidatable(pos.deposit, pnl, funding, maintenance);
@@ -391,6 +413,7 @@ contract PerpEngine is ReentrancyGuard {
     function _removePosition(address account, Position memory pos) internal {
         if (pos.size > 0) longOI -= uint256(pos.size);
         else shortOI -= uint256(-pos.size);
+        entryNotional -= _entryTerm(pos.size, pos.entryPrice);
         delete positions[account];
     }
 

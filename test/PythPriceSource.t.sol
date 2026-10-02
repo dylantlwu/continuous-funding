@@ -23,7 +23,8 @@ contract PythPriceSourceTest is Test {
 
     // Without this, a Pyth exponent of -8 could be scaled wrongly and every price would be off by orders of magnitude.
     function test_convertsPythExponentToWad() public {
-        (uint256 p, uint256 c, uint64 t) = src.update{value: 1}(_upd(83_500_12345678, 4_000_000_000, -8, uint64(block.timestamp)));
+        (uint256 p, uint256 c, uint64 t) =
+            src.update{value: 1}(_upd(83_500_12345678, 4_000_000_000, -8, uint64(block.timestamp)));
         assertEq(p, 83_500.12345678e18);
         assertEq(c, 40e18);
         assertEq(t, block.timestamp);

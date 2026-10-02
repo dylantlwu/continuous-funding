@@ -12,7 +12,6 @@ contract FundingCoreTest is Test {
     ConsensusFeed feed;
     PerpEngineHarness eng;
     address relayer = address(0xBEEF);
-    int256[5] venues;
     int256 constant APR_1PCT = TestParams.APR_1PCT;
     int256 constant W = TestParams.W;
     int256 constant V = TestParams.V;
@@ -20,34 +19,34 @@ contract FundingCoreTest is Test {
 
     function setUp() public {
         vm.warp(1_000_000);
-        feed = new ConsensusFeed(relayer, 100 * APR_1PCT, 5 * APR_1PCT, 120, 300);
+        feed = TestParams.newFeed(relayer);
         eng = new PerpEngineHarness(feed, TestParams.defaults());
     }
 
     function _post(int256 r) internal {
         vm.prank(relayer);
-        feed.post(0, r, uint64(block.timestamp), venues);
+        feed.post(0, uint64(block.timestamp), TestParams.venues(r));
     }
 
     // T1. Without this, a units or clock error (hours vs seconds, a missing 1e18) in the index would go
     // unnoticed: with c and p constant, funding per BTC over N seconds must be price x (c + p) x N exactly.
     function test_T1_constantRateAccruesExactly() public {
-        _post(10 * APR_1PCT);
-        eng.h_setPremium(3 * APR_1PCT);   // skew 0, so p stays where it is
+        _post(5 * APR_1PCT); // one step from 0
+        eng.h_setPremium(3 * APR_1PCT); // skew 0, so p stays where it is
         eng.h_touch(PRICE);
         int256 i0 = eng.fundingIndex();
         uint256 n = 86_400;
         vm.warp(block.timestamp + n);
         eng.h_touch(PRICE);
         assertEq(eng.premium(), 3 * APR_1PCT);
-        assertEq(eng.fundingIndex() - i0, int256(PRICE) * 13 * APR_1PCT * int256(n) / 1e18);
+        assertEq(eng.fundingIndex() - i0, int256(PRICE) * 8 * APR_1PCT * int256(n) / 1e18);
     }
 
     // T1 (bound branch). Without this, a saturated premium could keep growing past w or be integrated
     // as if it were still moving.
     function test_T1_saturatedPremiumAccruesAtW() public {
         _post(0);
-        eng.h_setOI(500e18, 0);           // beyond full imbalance: slope is +V
+        eng.h_setOI(500e18, 0); // beyond full imbalance: slope is +V
         eng.h_setPremium(W);
         eng.h_touch(PRICE);
         int256 i0 = eng.fundingIndex();
@@ -72,11 +71,11 @@ contract FundingCoreTest is Test {
         uint256 touches;
         for (uint256 i = 0; i < 8; i++) {
             vm.warp(block.timestamp + uint256(gaps[i]) + 1);
-            c += int256(moves[i]) % 6 * APR_1PCT;                // within the 5%-per-post step cap
+            c += int256(moves[i]) % 6 * APR_1PCT; // the feed clamps it; read back below
             _post(c);
             c = feed.rate(0);
             if (gaps[i] % 3 != 0) {
-                eng.h_touch(PRICE);                                // only one engine is touched in between
+                eng.h_touch(PRICE); // only one engine is touched in between
                 touches++;
             }
         }
@@ -109,7 +108,7 @@ contract FundingCoreTest is Test {
     function test_T7_engineSlopeFollowsSkew() public {
         _post(0);
         eng.h_touch(PRICE);
-        eng.h_setOI(0, 50e18);              // half imbalance, shorts heavy: p falls at V/2
+        eng.h_setOI(0, 50e18); // half imbalance, shorts heavy: p falls at V/2
         vm.warp(block.timestamp + 3600);
         eng.h_touch(PRICE);
         assertEq(eng.premium(), -(V / 2) * 3600);

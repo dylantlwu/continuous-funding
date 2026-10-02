@@ -23,7 +23,7 @@ library Funding {
 
     /// s > 0, -w <= p0 <= w.
     function _rising(int256 p0, int256 s, int256 w, int256 dt) private pure returns (int256 integral, int256 p1) {
-        int256 room = w - p0;                       // how far p can still rise
+        int256 room = w - p0; // how far p can still rise
         if (s * dt <= room) {
             // never reaches the bound: p0*dt + s*dt^2/2
             return (p0 * dt + (s * dt * dt) / 2, p0 + s * dt);

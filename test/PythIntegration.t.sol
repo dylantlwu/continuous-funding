@@ -20,13 +20,12 @@ contract PythIntegrationTest is Test {
     bytes32 constant BTC = bytes32(uint256(1));
     address trader = address(0xA11CE);
     address relayer = address(0xBEEF);
-    int256[5] venues;
 
     function setUp() public {
         vm.warp(1_000_000);
         pyth = new MockPyth(60, 1 wei);
         usdc = new TestUSDC();
-        feed = new ConsensusFeed(relayer, 100 * TestParams.APR_1PCT, 5 * TestParams.APR_1PCT, 120, 300);
+        feed = TestParams.newFeed(relayer);
         eng = new PerpEngine(IERC20(address(usdc)), feed, 0, new PythPriceSource(pyth, BTC), TestParams.defaults());
         deal(address(usdc), address(this), 1_000_000e6);
         usdc.approve(address(eng), type(uint256).max);
@@ -36,7 +35,7 @@ contract PythIntegrationTest is Test {
         vm.prank(trader);
         usdc.approve(address(eng), type(uint256).max);
         vm.prank(relayer);
-        feed.post(0, 0, uint64(block.timestamp), venues);
+        feed.post(0, uint64(block.timestamp), TestParams.venues(0));
     }
 
     function _upd(int64 price8, uint64 t) internal view returns (bytes[] memory u) {
@@ -69,7 +68,7 @@ contract PythIntegrationTest is Test {
 
         vm.recordLogs();
         vm.prank(trader);
-        eng.close{value: 1}(old);                  // resubmits the t0 update at 100,000
+        eng.close{value: 1}(old); // resubmits the t0 update at 100,000
         Vm.Log[] memory logs = vm.getRecordedLogs();
         uint256 closePrice;
         for (uint256 i = 0; i < logs.length; i++) {

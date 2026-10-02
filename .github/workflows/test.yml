@@ -31,5 +31,14 @@ jobs:
       - name: Run Forge build
         run: forge build --sizes
 
+      - name: Mixed margin and unit types must not compile (T4)
+        run: bash script/check-compile-fail.sh
+
+      - name: Golden vectors regenerate identically (T10 reference)
+        run: python3 -m validation.onchain_ref && git diff --exit-code test/golden
+
+      - name: Python validation tests
+        run: python3 -m unittest discover -s validation/tests -t .
+
       - name: Run Forge tests
         run: forge test -vvv

@@ -1,6 +1,10 @@
 # Validation engine
 
-Question it answers: **if someone trades against our funding rate and hedges on Binance, OKX, Bybit or Hyperliquid, how much funding can they extract?** Lower is better.
+Research tooling behind the design. The project's main goal is now to **protect the vault** that takes
+the other side of traders (see `docs/design.md`); `vault_sim.py` measures that. The rest of this
+directory answers the earlier question, kept because its data feeds the consensus rate `c`: **if someone
+trades against our funding rate and hedges on Binance, OKX, Bybit or Hyperliquid, how much funding can
+they extract?** Lower is better.
 
 ```bash
 python3 -m unittest discover -s validation/tests -t .        # intent tests, no network

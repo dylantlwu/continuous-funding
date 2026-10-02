@@ -79,24 +79,24 @@ def run(events):
 def scenario(seed=7):
     """Hand-written edge cases first, then a seeded random tail."""
     t0 = 1_000_000
-    ev = [
-        {"t": t0, "kind": "post", "rate": 10 * APR_1PCT},
+    ev = [   # rates stay inside the feed's bounds: first post one step (5%) from 0, then <= 5% per post and per minute
+        {"t": t0, "kind": "post", "rate": 5 * APR_1PCT},
         {"t": t0, "kind": "touch", "price": 100_000 * WAD, "long": 60 * WAD, "short": 0},
         {"t": t0 + 600, "kind": "touch", "price": 100_000 * WAD, "long": 60 * WAD, "short": 0},
-        {"t": t0 + 1800, "kind": "post", "rate": 12 * APR_1PCT},
+        {"t": t0 + 1800, "kind": "post", "rate": 7 * APR_1PCT},
         {"t": t0 + 4200, "kind": "touch", "price": 100_500 * WAD, "long": 60 * WAD, "short": 0},
         {"t": t0 + 13_200, "kind": "touch", "price": 99_000 * WAD, "long": 0, "short": 150 * WAD},  # p hits +w inside
-        {"t": t0 + 13_200, "kind": "post", "rate": 7 * APR_1PCT},                                   # same second
+        {"t": t0 + 13_200, "kind": "post", "rate": 2 * APR_1PCT},                                   # same second
         {"t": t0 + 33_200, "kind": "touch", "price": 99_000 * WAD, "long": 0, "short": 150 * WAD},  # +w to -w
         {"t": t0 + 33_207, "kind": "touch", "price": 98_765_432_109_876_543_210_987, "long": 37 * WAD, "short": 36 * WAD},
-        {"t": t0 + 33_300, "kind": "post", "rate": 2 * APR_1PCT},                                   # two posts between
-        {"t": t0 + 33_400, "kind": "post", "rate": -3 * APR_1PCT},                                  # touches
+        {"t": t0 + 33_300, "kind": "post", "rate": 4 * APR_1PCT},                                   # two posts between
+        {"t": t0 + 33_400, "kind": "post", "rate": -1 * APR_1PCT},                                  # touches
         {"t": t0 + 40_000, "kind": "touch", "price": 101_000 * WAD, "long": 0, "short": 0},
     ]
     rng = random.Random(seed)
-    t, rate = ev[-1]["t"], -3 * APR_1PCT
+    t, rate = ev[-1]["t"], -1 * APR_1PCT
     for _ in range(30):
-        t += rng.randint(1, 5000)                # the feed needs a newer second for each post
+        t += rng.randint(61, 5000)               # > 1 minute: a 5% move is inside the per-minute bound (integer slew)
         if rng.random() < 0.4:
             rate = max(-100 * APR_1PCT, min(100 * APR_1PCT, rate + rng.randint(-5, 5) * APR_1PCT))
             ev.append({"t": t, "kind": "post", "rate": rate})

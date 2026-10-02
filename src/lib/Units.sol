@@ -14,6 +14,18 @@ type MarginStatic is uint256;
 /// Changes with every price. Never stored as if it were a deposit.
 type MarginDynamic is uint256;
 
+// Arithmetic only within one type: Usdc + UsdWad does not compile.
+using {_addUsdc as +, _subUsdc as -, _ltUsdc as <, _gtUsdc as >} for Usdc global;
+using {_addWad as +, _subWad as -, _ltWad as <} for UsdWad global;
+
+function _addUsdc(Usdc a, Usdc b) pure returns (Usdc) { return Usdc.wrap(Usdc.unwrap(a) + Usdc.unwrap(b)); }
+function _subUsdc(Usdc a, Usdc b) pure returns (Usdc) { return Usdc.wrap(Usdc.unwrap(a) - Usdc.unwrap(b)); }
+function _ltUsdc(Usdc a, Usdc b) pure returns (bool) { return Usdc.unwrap(a) < Usdc.unwrap(b); }
+function _gtUsdc(Usdc a, Usdc b) pure returns (bool) { return Usdc.unwrap(a) > Usdc.unwrap(b); }
+function _addWad(UsdWad a, UsdWad b) pure returns (UsdWad) { return UsdWad.wrap(UsdWad.unwrap(a) + UsdWad.unwrap(b)); }
+function _subWad(UsdWad a, UsdWad b) pure returns (UsdWad) { return UsdWad.wrap(UsdWad.unwrap(a) - UsdWad.unwrap(b)); }
+function _ltWad(UsdWad a, UsdWad b) pure returns (bool) { return UsdWad.unwrap(a) < UsdWad.unwrap(b); }
+
 /// Conversions. There is deliberately NO function between MarginStatic and MarginDynamic:
 /// mixing "what the trader put in" with "what the position needs" is a production bug class
 /// (wrong liquidation prices) that must fail to compile. They only meet in `Margin`.
@@ -42,6 +54,11 @@ library Units {
 
     function deposit(Usdc x) internal pure returns (MarginStatic) {
         return MarginStatic.wrap(Usdc.unwrap(x));
+    }
+
+    /// Add-margin: the deposit grows by exactly the cash added.
+    function addCash(MarginStatic x, Usdc y) internal pure returns (MarginStatic) {
+        return MarginStatic.wrap(MarginStatic.unwrap(x) + Usdc.unwrap(y));
     }
 
     function cash(MarginStatic x) internal pure returns (Usdc) {

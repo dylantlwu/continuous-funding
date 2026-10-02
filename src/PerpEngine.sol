@@ -108,6 +108,7 @@ contract PerpEngine is ReentrancyGuard {
     error OpenInterestNotZero();
     error RefundFailed();
     error InsufficientOracleFee(uint256 sent, uint256 fee);
+    error ZeroPrice();
 
     constructor(IERC20 usdc_, ConsensusFeed feed_, uint8 feedMarket_, IPriceSource priceSource_, Params memory p) {
         usdc = usdc_;
@@ -200,12 +201,8 @@ contract PerpEngine is ReentrancyGuard {
         _touch(price);
 
         uint256 checkPrice = pos.size > 0 ? price + conf : price - conf;
-        (UsdWad pnl, UsdWad funding) = _pnlAndFunding(pos, checkPrice);
-        int256 notional = _notionalUp(_abs(pos.size), checkPrice);
-        MarginDynamic maintenance =
-            Units.required(UsdWad.wrap(WadMath.mulDivCeil(notional, SafeCast.toInt(maintenanceMarginRate), WAD)));
-        UsdWad equity = Units.staticWad(pos.deposit) + pnl - funding;
-        if (!Margin.isLiquidatable(pos.deposit, pnl, funding, maintenance)) revert NotLiquidatable(equity, maintenance);
+        (bool liquidatable, UsdWad equity, MarginDynamic maintenance) = _liquidationCheck(pos, checkPrice);
+        if (!liquidatable) revert NotLiquidatable(equity, maintenance);
 
         Usdc reward = Units.toUsdcDown(
             UsdWad.wrap(WadMath.mulDivFloor(_notionalDown(_abs(pos.size), checkPrice), SafeCast.toInt(liquidationFeeRate), WAD))
@@ -334,6 +331,7 @@ contract PerpEngine is ReentrancyGuard {
         if (msg.value < oracleFee) revert InsufficientOracleFee(msg.value, oracleFee);
         uint64 publishTime;
         (price, conf, publishTime) = priceSource.update{value: oracleFee}(update);
+        if (price == 0) revert ZeroPrice(); // the adapter checks too; never value a position at zero
         if (publishTime < lastPublishTime) revert PriceOlderThanLast(publishTime, lastPublishTime);
         // a publish time slightly ahead of block.timestamp (clock skew) counts as age 0
         if (block.timestamp > publishTime && block.timestamp - publishTime > maxAge) {
@@ -367,8 +365,25 @@ contract PerpEngine is ReentrancyGuard {
         if (!Margin.canOpen(deposit, initial)) revert InsufficientMargin(deposit, initial);
     }
 
+    /// Rounded in the trader's FAVOUR (pnl up, funding down, maintenance down): the protocol may fail
+    /// to liquidate by dust, it can never liquidate a position that is healthy in exact arithmetic (T5).
+    function _liquidationCheck(Position memory pos, uint256 price)
+        internal
+        view
+        returns (bool liquidatable, UsdWad equity, MarginDynamic maintenance)
+    {
+        UsdWad pnl =
+            UsdWad.wrap(WadMath.mulDivCeil(pos.size, SafeCast.toInt(price) - SafeCast.toInt(pos.entryPrice), WAD));
+        UsdWad funding = UsdWad.wrap(WadMath.mulDivFloor(pos.size, fundingIndex - pos.entryIndex, WAD));
+        maintenance = Units.requiredDown(
+            UsdWad.wrap(WadMath.mulDivFloor(_notionalDown(_abs(pos.size), price), SafeCast.toInt(maintenanceMarginRate), WAD))
+        );
+        equity = Units.staticWad(pos.deposit) + pnl - funding;
+        liquidatable = Margin.isLiquidatable(pos.deposit, pnl, funding, maintenance);
+    }
+
+    /// For payouts: rounded AGAINST the trader, so rounding never pays out cash the vault does not have.
     function _pnlAndFunding(Position memory pos, uint256 price) internal view returns (UsdWad pnl, UsdWad funding) {
-        // both rounded against the trader
         pnl = UsdWad.wrap(WadMath.mulDivFloor(pos.size, SafeCast.toInt(price) - SafeCast.toInt(pos.entryPrice), WAD));
         funding = UsdWad.wrap(WadMath.mulDivCeil(pos.size, fundingIndex - pos.entryIndex, WAD));
     }

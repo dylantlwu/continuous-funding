@@ -74,6 +74,12 @@ library Units {
         return MarginDynamic.wrap(Usdc.unwrap(toUsdcUp(x)));
     }
 
+    /// Rounded DOWN. Only for the liquidation threshold, where rounding toward "healthy" is the safe side:
+    /// the protocol may liquidate a dust amount late, never a healthy position early.
+    function requiredDown(UsdWad x) internal pure returns (MarginDynamic) {
+        return MarginDynamic.wrap(Usdc.unwrap(toUsdcDown(x)));
+    }
+
     function dynamicWad(MarginDynamic x) internal pure returns (UsdWad) {
         return toWad(Usdc.wrap(MarginDynamic.unwrap(x)));
     }

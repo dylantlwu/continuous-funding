@@ -70,9 +70,15 @@ value types, no implicit conversion):
 
 Size is `int256` base units ×1e18 (positive = long); price is USD per base unit ×1e18 converted from
 Pyth's `(price, expo)` at the boundary; rates are fraction per second ×1e18 (positive = longs pay).
-The only `UsdWad → Usdc` conversion lives in one library function that takes an explicit rounding
-direction. Rounding is always against the trader, so rounding never creates a payout the vault does
-not have; real losses beyond a position's margin are recorded as explicit shortfalls (§7).
+The only `UsdWad → Usdc` conversions live in one library with an explicit rounding direction. The
+direction is chosen by which mistake must be impossible:
+- **payouts** (PnL, funding owed, fees) round against the trader, so rounding never pays out cash the
+  vault does not have;
+- the **liquidation decision** rounds toward "healthy" (PnL up, funding down, maintenance down), so the
+  protocol may liquidate a dust amount late but can never liquidate a position that is healthy in
+  exact arithmetic. A test pins a position whose equity equals its maintenance margin to the wei.
+
+Real losses beyond a position's margin are recorded as explicit shortfalls (§7).
 
 Reference values: `w = 5%` APR = 1,585,489,599 per second (×1e18). Velocity "2% APR per hour at full
 imbalance" = 176,166 per second per second (×1e18). At full imbalance `p` reaches `w` in 2.5 hours.
@@ -197,6 +203,10 @@ remaining equity to the vault.
 Monad charges the gas **limit**. The frontend sends fixed per-function limits from
 `forge test --gas-report` plus a small margin. Every call touches one market; accrual is O(1).
 
+Measured with a mock price source (so **excluding** Pyth's signature verification, which must be
+measured on testnet with real update payloads before the limits are fixed), max over the test runs:
+`open` 285,918 · `close` 192,523 · `liquidate` 214,350 · `poke` 141,749 · `addMargin` 53,897.
+
 ## 10. Open decisions (owner)
 
 1. Feed bounds: `cMax` 100% APR and `maxStep` 5% APR per post?
@@ -214,10 +224,10 @@ Monad charges the gas **limit**. The frontend sends fixed per-function limits fr
 | # | Test |
 |---|---|
 | T1 | Constant `c` and `p`: funding over N seconds equals rate × N exactly. |
-| T2 | Random histories: vault funding computed as `-skew × ΔIndex` equals minus the sum over positions, up to bounded dust in the vault's favour; total USDC conserved. |
+| T2 | Random histories, checked after every step: USDC held equals vault cash plus deposits; long and short open interest equal the positions; the vault's funding, integrated by the test as `-skew × ΔIndex` at every touch, equals minus the sum over positions of `size × (exit or current index − entry index)`. |
 | T3 | Touching the market at arbitrary times (with feed posts in between) leaves the final index unchanged. |
 | T4 | A file mixing `MarginStatic`/`MarginDynamic` (and one mixing `Usdc`/`UsdWad`) fails to compile; the script asserts the compiler errors. |
-| T5 | Fuzz: healthy positions cannot be liquidated, at any price within the allowed age and confidence. |
+| T5 | Fuzz: healthy positions cannot be liquidated, at any price within the allowed age and confidence; clearly unhealthy ones can (so a contract that never liquidates fails). Plus one position exactly at the boundary. |
 | T6 | Zero, stale, older-than-last and missing data revert; global problems do not block closes or liquidations. |
 | T7 | Fuzz: `|p| <= w`; `p` moves at most `V × dt`. |
 | T8 | Extreme sizes and prices: no overflow; rounding always against the trader. |

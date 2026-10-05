@@ -1,0 +1,4 @@
+# Only the on-chain parts of the service (chain.py, relayer.py, keeper.py) need these; the research
+# engine and recorder stay standard-library only.
+eth-account==0.13.7
+eth-abi==5.2.0

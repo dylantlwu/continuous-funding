@@ -2,6 +2,8 @@
 # so nothing outside it (in particular the repository's .env) is ever uploaded.
 FROM python:3.12-slim
 WORKDIR /app
+COPY requirements.txt /app/validation/requirements.txt
+RUN pip install --no-cache-dir -r /app/validation/requirements.txt
 COPY . /app/validation
 ENV PYTHONUNBUFFERED=1 RECORDER_DB=/data/live.sqlite
 CMD ["python", "-m", "validation.service"]

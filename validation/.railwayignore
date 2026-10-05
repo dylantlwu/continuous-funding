@@ -3,3 +3,4 @@ reports/
 tests/
 __pycache__/
 *.pyc
+.venv/

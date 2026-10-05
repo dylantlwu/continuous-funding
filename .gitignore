@@ -26,3 +26,4 @@ validation/data/
 validation/reports/
 # local fork rehearsals; real testnet deployments are committed
 deployments/local*.json
+validation/.venv/

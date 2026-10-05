@@ -27,7 +27,8 @@ def venue_rates(db, now_ms, max_age_ms=MAX_DELAY_S * 1000):
     rates, observed, detail = [], [], {}
     for venue, symbol in VENUES:
         polled = db.execute("SELECT MAX(ts_ms) FROM polls WHERE venue=? AND ok=1", (venue,)).fetchone()[0]
-        snap = db.execute("SELECT rate, interval_h FROM snapshots WHERE venue=? AND symbol=? "
+        # venue AND base first: that is the recorder's index (snap_vb); without base it scans every row
+        snap = db.execute("SELECT rate, interval_h FROM snapshots WHERE venue=? AND base='BTC' AND symbol=? "
                           "ORDER BY ts_ms DESC LIMIT 1", (venue, symbol)).fetchone()
         if polled is None or now_ms - polled > max_age_ms:
             why = "no recent successful poll"

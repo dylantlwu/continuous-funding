@@ -141,8 +141,32 @@ class Keeper:
             acted += self.check_liquidations()
         return acted
 
+    def latency_probe(self, rounds=5):
+        """Free (no transaction): how long the latest-price liquidation path takes from this host. A liquidation
+        needs one Hermes fetch, one simulation and about five RPC calls to send, then inclusion, all within 3 s
+        of the print's publish time. Logged so the 3-second window can be judged from the real server."""
+        hermes_s, rpc_s, ages = [], [], []
+        for _ in range(rounds):
+            t = time.time()
+            upd = hermes.latest(self.feed_id, max_cache_s=0)
+            hermes_s.append(time.time() - t)
+            t = time.time()
+            _, block_ts, _ = self.chain.block()
+            rpc_s.append(time.time() - t)
+            ages.append(block_ts - upd["publish_time"])
+            time.sleep(0.5)
+        med = lambda xs: sorted(xs)[len(xs) // 2]
+        budget = med(hermes_s) + 7 * med(rpc_s)
+        self.log(f"keeper: latency probe: hermes {med(hermes_s):.2f}s, rpc {med(rpc_s):.2f}s per call, "
+                 f"latest-price path before inclusion ~{budget:.2f}s, block time minus print time {med(ages)}s")
+        return budget
+
     def run(self, every=1.0):
         self.log(f"keeper: engine {self.engine} as {self.chain.address}, from block {self.cursor + 1}")
+        try:
+            self.latency_probe()
+        except Exception:
+            traceback.print_exc()
         while True:
             t = time.time()
             try:

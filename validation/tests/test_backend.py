@@ -77,6 +77,22 @@ class VenueRates(unittest.TestCase):
         self.assertIn("missing", detail["hyperliquid"])
 
 
+class RecorderQuery(unittest.TestCase):
+    # Without this, reading the latest rate would scan the recorder's whole history (millions of rows on the
+    # server: 2.8 s per venue measured) and every wake, i.e. every first open, would make the trader wait.
+    def test_latest_rate_lookup_uses_the_recorder_index(self):
+        import tempfile
+        from validation import recorder
+        with tempfile.TemporaryDirectory() as d:
+            db = recorder.open_db(os.path.join(d, "live.sqlite"))
+            relayer.venue_rates(db, now_ms=0)  # must run against the real schema
+            plan = db.execute("EXPLAIN QUERY PLAN SELECT rate, interval_h FROM snapshots WHERE venue=? AND base='BTC' "
+                              "AND symbol=? ORDER BY ts_ms DESC LIMIT 1", ("binance", "BTCUSDT")).fetchall()
+            self.assertIn("USING INDEX snap_vb", plan[-1][-1])
+            import inspect
+            self.assertIn("base='BTC'", inspect.getsource(relayer.venue_rates), "the query the relayer runs")
+
+
 class Wake(unittest.TestCase):
     def chain(self, last_post, ts=10_000):
         return FakeChain({"lastPostTime(uint8)": (last_post,)}, ts=ts)

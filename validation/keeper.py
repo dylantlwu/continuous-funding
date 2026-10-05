@@ -1,9 +1,12 @@
-"""Keeper: the fallback that settles orders nobody else settled, and liquidates (docs/design.md §3, §7).
+"""Keeper: settles orders, keeps c posted while positions are open, liquidates, records the market
+(docs/design.md §3, §5.4, §7).
 
-Traders settle their own orders about 2 s after committing; the keeper settles any order still pending
-`grace_s` seconds after its fill time, at the same pinned price anyone would have to use. It cancels orders
-past their deadline so the margin goes back. It liquidates only positions that a free eth_call simulation
-says are liquidatable, so it never pays for a transaction that would revert.
+It settles every order as soon as the first Pyth print at or after its fill time exists (owner, 2026-10-05:
+one wallet confirmation per trade; anyone else may settle first, at the same pinned price). It cancels orders
+past their deadline so the margin goes back. While there is open interest or a pending order it asks the
+relayer to post c every 2 minutes. It liquidates only positions that a free eth_call simulation says are
+liquidatable, so it never pays for a transaction that would revert. Every 5 minutes it samples c, p, open
+interest and vault cash with free reads, for the market history chart.
 
 Progress (last scanned block, known accounts) is kept in the recorder's SQLite so a restart resumes instead of
 rescanning: Monad's public RPC serves at most 100 blocks per eth_getLogs.
@@ -27,7 +30,8 @@ def _account(log):
 
 
 class Keeper:
-    def __init__(self, chain, engine, db, post_if_needed, start_block, grace_s=10, log=None):
+    def __init__(self, chain, engine, db, post_if_needed, start_block, grace_s=0, log=None, post_every_s=120,
+                 sample_every_s=300):
         self.chain, self.engine, self.db, self.post_if_needed = chain, engine, db, post_if_needed
         self.log = log or (lambda *a: print(*a, flush=True))  # unbuffered: a keeper action must show at once
         self.grace_s = grace_s
@@ -43,6 +47,11 @@ class Keeper:
         self.cursor = row[0] if row else start_block - 1
         self.pending = {}  # account -> fill time (commitTime + settleDelay)
         self._last_liq = 0.0
+        self.post_every_s, self.sample_every_s = post_every_s, sample_every_s
+        self._last_post_check = 0.0
+        self._last_sample = 0.0
+        db.execute("CREATE TABLE IF NOT EXISTS market_samples(engine TEXT, ts INTEGER, block INTEGER, c TEXT, p TEXT, "
+                   "long_oi TEXT, short_oi TEXT, vault_cash TEXT, funding_index TEXT, PRIMARY KEY(engine, ts))")
 
     # ------------------------------------------------------------ discovery
 
@@ -87,7 +96,10 @@ class Keeper:
                 continue
             if not is_close and self.chain.call(self.feed, "isStale(uint8)", ["uint8"], [0], ["bool"])[0]:
                 self.post_if_needed(min_age_s=0)  # an open is rejected at settlement if the feed went stale
-            upd = hermes.at(self.feed_id, at)
+            try:
+                upd = hermes.at(self.feed_id, at)
+            except hermes.HermesError:
+                continue  # the print for the fill time is not published yet: try again next second
             args = (["address", "bytes[]"], [acct, [bytes.fromhex(upd["update"][2:])]])
             fee = self._fee(upd["update"])
             try:  # free simulation first: never pay for a settlement that would revert
@@ -137,13 +149,46 @@ class Keeper:
 
     # ------------------------------------------------------------ loop
 
+    # ------------------------------------------------------------ c while positions are open; market samples
+
+    def _open_interest(self):
+        c = self.chain.call
+        return (c(self.engine, "longOI()", out=["uint256"])[0], c(self.engine, "shortOI()", out=["uint256"])[0])
+
+    def keep_c_fresh(self):
+        """Post c at most every `post_every_s` while anything accrues or waits to fill; never when the book is
+        empty (nothing accrues, and every post is charged at its gas limit)."""
+        if time.time() - self._last_post_check < 30:
+            return None
+        self._last_post_check = time.time()
+        long_oi, short_oi = self._open_interest()
+        if long_oi + short_oi == 0 and not self.pending:
+            return None
+        return self.post_if_needed(min_age_s=self.post_every_s - 5)
+
+    def sample(self, now_ts, block):
+        if time.time() - self._last_sample < self.sample_every_s:
+            return
+        self._last_sample = time.time()
+        c, p, _ = self.chain.call(self.engine, "currentRate()", out=["int256", "int256", "int256"])
+        long_oi, short_oi = self._open_interest()
+        vault = self.chain.call(self.engine, "vaultCash()", out=["uint256"])[0]
+        index = self.chain.call(self.engine, "fundingIndexNow()", out=["int256"])[0]
+        self.db.execute("INSERT OR REPLACE INTO market_samples VALUES (?,?,?,?,?,?,?,?,?)",
+                        (self.engine, now_ts, block, str(c), str(p), str(long_oi), str(short_oi), str(vault), str(index)))
+        self.db.commit()
+
     def step(self):
         self.scan()
-        _, now_ts, _ = self.chain.block()
+        block, now_ts, _ = self.chain.block()
         acted = self.settle_due(now_ts)
+        posted = self.keep_c_fresh()
+        if posted and posted.get("posted"):
+            self.log(f"keeper: posted c (positions open) tx {posted['tx']}")
         if time.time() - self._last_liq >= 5:
             self._last_liq = time.time()
             acted += self.check_liquidations()
+        self.sample(now_ts, block)
         return acted
 
     def latency_probe(self, rounds=5):

@@ -238,11 +238,21 @@ class KeeperSettlement(unittest.TestCase):
         import importlib
         importlib.reload(hermes)
 
-    # Without this, the keeper would race the trader's own settlement and pay for a transaction the trader was
-    # about to send (or that reverts because it is already settled).
-    def test_waits_for_the_grace_period(self):
-        k, c, _ = self.make((0, 0, 1_000, False), ts=1_011)
-        self.assertEqual(k.settle_due(1_011), [])
+    # Without this, the keeper would try to settle before the fill time, when no valid print can exist yet.
+    def test_does_not_settle_before_the_fill_time(self):
+        k, c, _ = self.make((0, 0, 1_000, False), ts=1_001)
+        self.assertEqual(k.settle_due(1_001), [])
+        self.assertEqual(c.sent, [])
+
+    # Without this, the second or so between the fill time and Pyth publishing its print would crash the
+    # keeper's step instead of simply retrying, and the trader (who now confirms only once) would wait.
+    def test_retries_quietly_until_the_print_exists(self):
+        k, c, _ = self.make((10**18, 10**9, 1_000, False), ts=1_002)
+        def not_yet(feed_id, t):
+            raise hermes.HermesError("Hermes HTTP 404")
+        hermes.at = not_yet
+        self.assertEqual(k.settle_due(1_002), [])
+        self.assertIn("0xabc", k.pending)
         self.assertEqual(c.sent, [])
 
     # Without this, a settled order would be retried forever.
@@ -276,6 +286,19 @@ class KeeperSettlement(unittest.TestCase):
         k.settle_due(1_020)
         self.assertEqual(c.sent, [])
         self.assertIn("0xabc", k.pending, "kept for a retry")
+
+    # Without this, c would go unposted while positions accrue at it (the review's top finding), or be posted
+    # with nobody exposed, spending the relayer's gas for nothing.
+    def test_posts_c_only_while_something_accrues_or_waits(self):
+        k, c, posts = self.make((0, 0, 0, False), ts=1_100)
+        k.pending.clear()
+        c.answers.update({"longOI()": (0,), "shortOI()": (0,)})
+        k.keep_c_fresh()
+        self.assertEqual(posts, [], "empty book: no post")
+        k._last_post_check = 0
+        c.answers["shortOI()"] = (5 * 10**17,)
+        k.keep_c_fresh()
+        self.assertEqual(posts, [115], "positions open: post when c is older than about 2 minutes")
 
     # Without this, an order nobody settled in time would keep the trader's margin in escrow forever.
     def test_cancels_expired_orders_so_the_margin_goes_back(self):

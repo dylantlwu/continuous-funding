@@ -6,6 +6,7 @@ Chain (needs PERP_ENGINE, MONAD_RPC; signing needs PRIVATE_KEY = the feed's rela
   GET  /api/chain/config      addresses and parameters, all read from the engine on chain
   GET  /api/consensus         the five venue rates and their median, computed off-chain (free)
   GET  /api/consensus/history?hours=24   per-minute median, for the chart of settlement cadences
+  GET  /api/market/history?hours=24      c, p, open interest and vault cash sampled by the keeper every 5 minutes
   GET  /api/pyth/latest       newest signed Pyth update (the key stays on this server)
   GET  /api/pyth/at?t=UNIX    first signed Pyth print at or after t, which settling an order requires
   POST /api/wake              post the venue rates on-chain if the feed is older than 3 minutes (before an open)
@@ -118,6 +119,19 @@ class Handler(BaseHTTPRequestHandler):
                 db.close()
             self._json(200, {"step_s": 60, "points": [[t, r] for t, r in pts]})
             return True
+        if path == "/api/market/history":
+            hours = min(24 * 14, max(1, int(q.get("hours", "24"))))
+            db = recorder.open_db()
+            try:
+                db.execute("CREATE TABLE IF NOT EXISTS market_samples(engine TEXT, ts INTEGER, block INTEGER, c TEXT, "
+                           "p TEXT, long_oi TEXT, short_oi TEXT, vault_cash TEXT, funding_index TEXT, PRIMARY KEY(engine, ts))")
+                rows = db.execute("SELECT ts, block, c, p, long_oi, short_oi, vault_cash, funding_index FROM market_samples "
+                                  "WHERE engine=? AND ts>=? ORDER BY ts", (CHAIN_CFG["engine"], int(time.time()) - hours * 3600)).fetchall()
+            finally:
+                db.close()
+            keys = ["ts", "block", "c", "p", "longOI", "shortOI", "vaultCash", "fundingIndex"]
+            self._json(200, {"engine": CHAIN_CFG["engine"], "samples": [dict(zip(keys, r)) for r in rows]})
+            return True
         if path == "/api/pyth/latest":
             self._json(200, hermes.latest(CHAIN_CFG["feedId"]))
             return True
@@ -197,7 +211,7 @@ def keeper_loop():
     k = keeper.Keeper(CHAIN, CHAIN_CFG["engine"], db,
                       lambda min_age_s: relayer.post_if_needed(CHAIN, CHAIN_CFG["feed"], db, int(time.time() * 1000), min_age_s),
                       start_block=int(os.environ.get("ENGINE_START_BLOCK", "0")),
-                      grace_s=int(os.environ.get("KEEPER_GRACE_S", "10")))
+                      grace_s=int(os.environ.get("KEEPER_GRACE_S", "0")))
     k.run()
 
 

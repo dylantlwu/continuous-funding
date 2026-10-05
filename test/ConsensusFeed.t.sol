@@ -93,6 +93,18 @@ contract ConsensusFeedTest is Test {
         assertEq(feed.medianOf([int256(-4), -1, M, -1, -9]), -2, "-2.5 rounds toward zero");
     }
 
+    // Without this, the backend's chart of c (validation/relayer.median_like_contract, which cannot call the
+    // contract once per minute of history) could quietly use a different median rule from the one on chain.
+    function test_backendMedianMatchesTheContract() public view {
+        string memory j = vm.readFile("test/golden/median_vectors.json");
+        int256[] memory flat = vm.parseJsonIntArray(j, ".venues");
+        int256[] memory expected = vm.parseJsonIntArray(j, ".expected");
+        for (uint256 i = 0; i < expected.length; i++) {
+            int256[5] memory v = [flat[5 * i], flat[5 * i + 1], flat[5 * i + 2], flat[5 * i + 3], flat[5 * i + 4]];
+            assertEq(feed.medianOf(v), expected[i]);
+        }
+    }
+
     // Without this, two venues (or one plus a missing one) could set c alone.
     function test_tooFewVenuesReverts() public {
         vm.expectRevert(abi.encodeWithSelector(ConsensusFeed.TooFewVenues.selector, 2));

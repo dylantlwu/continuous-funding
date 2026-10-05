@@ -5,12 +5,13 @@ Research (read-only): /  (dashboard)   /api/markets   /api/state?base=BTC&policy
 Chain (needs PERP_ENGINE, MONAD_RPC; signing needs PRIVATE_KEY = the feed's relayer; Pyth needs PYTH_API_KEY):
   GET  /api/chain/config      addresses and parameters, all read from the engine on chain
   GET  /api/consensus         the five venue rates and their median, computed off-chain (free)
+  GET  /api/consensus/history?hours=24   per-minute median, for the chart of settlement cadences
   GET  /api/pyth/latest       newest signed Pyth update (the key stays on this server)
   GET  /api/pyth/at?t=UNIX    first signed Pyth print at or after t, which settling an order requires
   POST /api/wake              post the venue rates on-chain if the feed is older than 3 minutes (before an open)
 The only endpoint that spends gas is /api/wake, and it posts at most once per 3 minutes whoever calls it.
-PUBLIC_API_ONLY=1 (set on the public domain): only the chain endpoints and /healthz answer; the research
-dashboard and its data stay private (owner, 2026-10-05).
+PUBLIC_API_ONLY=1 (set on the public domain): only the chain endpoints, /healthz and the front-end (built into
+static/app/, served at /) answer; the research dashboard and its data stay private (owner, 2026-10-05).
 """
 import json
 import os
@@ -30,6 +31,9 @@ _wake_seen = {}  # ip -> last wake time
 BASES = [b for b in os.environ.get("DASH_BASES", "BTC,ETH,SOL,TSLA,NVDA").split(",") if b]
 POLICIES = ["median", "midrange", "anchor_binance"]
 STATIC = os.path.join(os.path.dirname(__file__), "static", "dashboard.html")
+APP_DIR = os.path.join(os.path.dirname(__file__), "static", "app")
+TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript", ".css": "text/css", ".svg": "image/svg+xml",
+         ".woff2": "font/woff2", ".woff": "font/woff", ".png": "image/png", ".ico": "image/x-icon", ".json": "application/json"}
 
 
 def recorder_loop(every):
@@ -105,6 +109,15 @@ class Handler(BaseHTTPRequestHandler):
             self._json(200, {"venues": detail, "rates_per_second_wad": [None if r == relayer.MISSING else r for r in rates],
                              "median_per_second_wad": median, "observed_ms": observed_ms})
             return True
+        if path == "/api/consensus/history":
+            hours = min(48, max(1, int(q.get("hours", "24"))))
+            db = recorder.open_db()
+            try:
+                pts = relayer.consensus_history(db, int(time.time() * 1000), hours=hours)
+            finally:
+                db.close()
+            self._json(200, {"step_s": 60, "points": [[t, r] for t, r in pts]})
+            return True
         if path == "/api/pyth/latest":
             self._json(200, hermes.latest(CHAIN_CFG["feedId"]))
             return True
@@ -124,7 +137,7 @@ class Handler(BaseHTTPRequestHandler):
             if CHAIN and u.path.startswith("/api/") and self._chain_get(u.path, q):
                 return None
             if PUBLIC_API_ONLY and u.path != "/healthz":
-                return self._send(404, "not found", "text/plain")
+                return self._app(u.path)
             if u.path == "/":
                 with open(STATIC, "rb") as f:
                     return self._send(200, f.read(), "text/html; charset=utf-8")
@@ -141,6 +154,21 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e:                  # fail loud to the client, keep serving
             traceback.print_exc()
             return self._send(500, json.dumps({"error": str(e)[:300]}), "application/json")
+
+    def _app(self, path):
+        """The built front-end. Only files under static/app/ (no traversal); hashed assets are cached."""
+        rel = "index.html" if path in ("/", "/index.html") else path.lstrip("/")
+        full = os.path.realpath(os.path.join(APP_DIR, rel))
+        if not full.startswith(os.path.realpath(APP_DIR) + os.sep) or not os.path.isfile(full):
+            return self._send(404, "not found", "text/plain")
+        with open(full, "rb") as f:
+            body = f.read()
+        self.send_response(200)
+        self.send_header("content-type", TYPES.get(os.path.splitext(full)[1], "application/octet-stream"))
+        self.send_header("cache-control", "public, max-age=31536000, immutable" if rel.startswith("assets/") else "no-store")
+        self.send_header("content-length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
     def log_message(self, *a):
         pass

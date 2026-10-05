@@ -186,11 +186,36 @@ class PublicDomain(unittest.TestCase):
                 return urllib.request.urlopen(base + path, timeout=5).status
             except urllib.error.HTTPError as e:
                 return e.code
+        import http.client as hc
+        import tempfile
+
+        def raw(path):  # http.client sends the path as is (urllib would normalise "..")
+            c = hc.HTTPConnection("127.0.0.1", srv.server_port, timeout=5)
+            c.request("GET", path)
+            r = c.getresponse()
+            body = r.read()
+            c.close()
+            return r.status, body
+        root = tempfile.mkdtemp()
+        app = os.path.join(root, "app")
+        os.makedirs(os.path.join(app, "assets"))
+        with open(os.path.join(app, "index.html"), "w") as f:
+            f.write("<html>app</html>")
+        with open(os.path.join(root, "secret.txt"), "w") as f:  # a real file just outside the app folder
+            f.write("PRIVATE_KEY=do-not-serve")
+        old_dir, service.APP_DIR = service.APP_DIR, app
         try:
             self.assertEqual(code("/healthz"), 200)
-            for private in ("/", "/api/markets", "/api/state?base=BTC"):
+            for private in ("/api/markets", "/api/state?base=BTC"):
                 self.assertEqual(code(private), 404, private)
+            self.assertEqual(raw("/"), (200, b"<html>app</html>"), "the front-end, not the research dashboard")
+            # Without this, a crafted path could read the service's own files (including any secrets on disk).
+            for evil in ("/../secret.txt", "/assets/../../secret.txt", "/%2e%2e/secret.txt", "/..%2fsecret.txt"):
+                status, body = raw(evil)
+                self.assertEqual(status, 404, evil)
+                self.assertNotIn(b"do-not-serve", body, evil)
         finally:
+            service.APP_DIR = old_dir
             service.PUBLIC_API_ONLY = old
             srv.shutdown()
 

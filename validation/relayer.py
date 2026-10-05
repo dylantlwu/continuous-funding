@@ -17,6 +17,44 @@ MIN_VENUES = 3
 _post_lock = threading.Lock()
 
 
+def median_like_contract(values):
+    """ConsensusFeed.medianOf on the venues present: None below three; even count = mean of the middle two,
+    rounded toward zero. Only for display history (one on-chain call per minute of history would be absurd);
+    test/golden/median_vectors.json makes the Solidity suite check this against the contract itself."""
+    a = sorted(values)
+    n = len(a)
+    if n < MIN_VENUES:
+        return None
+    if n % 2:
+        return a[n // 2]
+    s = a[n // 2 - 1] + a[n // 2]
+    return abs(s) // 2 if s >= 0 else -(abs(s) // 2)
+
+
+def consensus_history(db, now_ms, hours=24, step_s=60):
+    """[(t_ms, median per-second rate 1e18 or None)] every `step_s` over the last `hours`, from the recorder.
+    A venue carries its last recorded value forward (snapshots are written only on change). For the chart of
+    settlement cadences; the on-chain c is whatever the relayer posted before each open."""
+    start = now_ms - hours * 3_600_000
+    series = []
+    for venue, symbol in VENUES:
+        prev = db.execute("SELECT ts_ms, rate, interval_h FROM snapshots WHERE venue=? AND base='BTC' AND symbol=? "
+                          "AND ts_ms < ? ORDER BY ts_ms DESC LIMIT 1", (venue, symbol, start)).fetchall()
+        rows = db.execute("SELECT ts_ms, rate, interval_h FROM snapshots WHERE venue=? AND base='BTC' AND symbol=? "
+                          "AND ts_ms >= ? AND ts_ms <= ? ORDER BY ts_ms", (venue, symbol, start, now_ms)).fetchall()
+        series.append(prev + rows)
+    out, idx = [], [0] * len(series)
+    for t in range(start - start % (step_s * 1000) + step_s * 1000, now_ms + 1, step_s * 1000):
+        present = []
+        for i, rows in enumerate(series):
+            while idx[i] + 1 < len(rows) and rows[idx[i] + 1][0] <= t:
+                idx[i] += 1
+            if rows and rows[idx[i]][0] <= t and rows[idx[i]][2]:
+                present.append(per_second_wad(rows[idx[i]][1], rows[idx[i]][2]))
+        out.append((t, median_like_contract(present)))
+    return out
+
+
 def per_second_wad(rate, interval_h):
     """A rate per funding interval as a per-second fraction scaled 1e18 (positive = longs pay)."""
     return round(rate / (interval_h * 3600) * 10**18)

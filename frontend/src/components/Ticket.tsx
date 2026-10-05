@@ -9,7 +9,7 @@ const STEPS: { key: Step; label: string }[] = [
   { key: "wake", label: "Refresh c on-chain, only if it is older than 3 minutes" },
   { key: "commit", label: "Commit size and margin. No price yet" },
   { key: "wait", label: "Wait for the first Pyth print 2 s after the commit" },
-  { key: "fill", label: "Settle at that print. Anyone can; the keeper does after 10 s" },
+  { key: "fill", label: "The keeper settles at that print. Anyone can, at the same price" },
 ];
 
 export function Ticket({ cfg, account, mine, price, conf, onConnect, busy, setBusy }: {
@@ -34,6 +34,7 @@ export function Ticket({ cfg, account, mine, price, conf, onConnect, busy, setBu
   const hasOrder = !!mine && mine.order[2] !== 0n;
   const usdcBal = mine ? Number(mine.usdc) / 1e6 : 0;
   const tooSmall = sizeBtc < 0.001;
+  const tooBig = sizeBtc > 10; // PerpEngine.maxSize: 10 BTC per account
 
   async function go() {
     if (!cfg || !account) return;
@@ -68,7 +69,7 @@ export function Ticket({ cfg, account, mine, price, conf, onConnect, busy, setBu
           <button className={side === "short" ? "on short" : ""} onClick={() => setSide("short")} disabled={busy}>Short</button>
         </div>
         <div className="field">
-          <label><span>Size</span><span className="mono">min 0.001 BTC</span></label>
+          <label><span>Size</span><span className="mono">0.001 – 10 BTC per account</span></label>
           <input className="mono" inputMode="decimal" value={size} onChange={(e) => setSize(e.target.value)} disabled={busy} aria-label="Size in BTC" />
         </div>
         <div className="field">
@@ -93,8 +94,9 @@ export function Ticket({ cfg, account, mine, price, conf, onConnect, busy, setBu
           <button className="btn" style={{ width: "100%", marginTop: 16 }} onClick={getUsdc} disabled={busy}>Get 10,000 test USDC</button>
         ) : (
           <button className={`btn ${side}`} style={{ width: "100%", marginTop: 16 }} onClick={go}
-                  disabled={busy || hasPosition || hasOrder || tooSmall || !entry}>
-            {hasPosition ? "Close your position first" : hasOrder ? "An order is waiting to fill" : `Commit ${side} ${sizeBtc || ""} BTC`}
+                  disabled={busy || hasPosition || hasOrder || tooSmall || tooBig || !entry}>
+            {hasPosition ? "Close your position first" : hasOrder ? "An order is waiting to fill"
+              : tooBig ? "At most 10 BTC per account" : `Commit ${side} ${sizeBtc || ""} BTC`}
           </button>
         )}
 

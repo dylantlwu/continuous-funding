@@ -1,7 +1,8 @@
-// The two-step trade as the user lives it. Commit (no price) -> wait for the first Pyth print at or after
-// commit + settleDelay -> settle with that print (the user's own wallet; the keeper does it after ~10 s if they
-// don't). The price is fixed by time, so neither the trader nor the settler chooses it.
-import { decodeErrorResult, decodeEventLog, maxUint256, parseUnits, type Address, type TransactionReceipt } from "viem";
+// The two-step trade as the user lives it: one wallet confirmation (owner, 2026-10-05). Commit (no price) ->
+// the keeper settles at the first Pyth print at or after commit + settleDelay as soon as it exists. If the
+// keeper has not settled 15 s after the fill time, the user settles it themselves at the same pinned print.
+// The price is fixed by time, so neither the trader nor the settler chooses it.
+import { decodeErrorResult, decodeEventLog, maxUint256, parseUnits, type Address, type Hex, type Log } from "viem";
 import { api, type ChainConfig } from "./api";
 import { abis, client, explain, oracleFee, write } from "./chain";
 
@@ -35,55 +36,75 @@ async function ensureFreshFeed(cfg: ChainConfig, progress: Progress) {
   throw new Error("The consensus rate could not be refreshed. Try again in a minute.");
 }
 
-/** Settle our own order with the pinned print; if the user declines, wait for the keeper. */
-async function fill(cfg: ChainConfig, account: Address, progress: Progress): Promise<TransactionReceipt | null> {
+/** Wait for the keeper to settle; if it has not 15 s after the fill time, settle with the pinned print ourselves.
+ * Returns the outcome read from the settlement's own events. */
+async function fill(cfg: ChainConfig, account: Address, commitBlock: bigint, progress: Progress): Promise<Outcome> {
   const { commitTime } = await readOrder(cfg, account);
   const at = commitTime + cfg.settleDelay;
-  progress("wait", `Waiting for the first Pyth print at or after ${new Date(at * 1000).toISOString().slice(11, 19)} UTC…`);
-  let print = null;
-  for (let i = 0; i < 40 && !print; i++) {
-    print = await api.at(at).catch(() => null);
-    if (!print) await sleep(700);
+  const hhmmss = (t: number) => new Date(t * 1000).toISOString().slice(11, 19);
+  progress("wait", `Filling at the first Pyth print at or after ${hhmmss(at)} UTC. The keeper settles it; no second confirmation.`);
+  while (Date.now() / 1000 < at + 15) {
+    if ((await readOrder(cfg, account)).commitTime === 0) return outcomeFromChain(cfg, account, commitBlock);
+    await sleep(1000);
   }
-  if (!print) throw new Error("Pyth has no print for the fill time yet; the keeper will fill the order.");
-  progress("fill", `Fill price fixed by the print at ${new Date(print.publish_time * 1000).toISOString().slice(11, 19)} UTC. Confirm to settle.`);
+  progress("fill", "The keeper has not filled it yet. Confirm in your wallet to settle it yourself at the same price.");
+  const print = await api.at(at);
   try {
     const fee = await oracleFee(cfg, print.update);
-    return await write(account, cfg.engine, abis.perpEngineAbi, "settle", [account, [print.update]], fee);
+    const r = await write(account, cfg.engine, abis.perpEngineAbi, "settle", [account, [print.update]], fee);
+    return outcomeFromLogs(r.logs, account, r.transactionHash) ?? noEvent(r.transactionHash);
   } catch (e) {
-    const { commitTime: still } = await readOrder(cfg, account);
-    if (still === 0) return null; // someone settled it meanwhile
-    progress("keeper", `${explain(e)} The keeper fills it at the same price within about 10 seconds.`);
-    for (let i = 0; i < 90; i++) {
-      if ((await readOrder(cfg, account)).commitTime === 0) return null;
+    if ((await readOrder(cfg, account)).commitTime === 0) return outcomeFromChain(cfg, account, commitBlock);
+    progress("keeper", `${explain(e)} Waiting for the keeper…`);
+    for (let i = 0; i < 60; i++) {
+      if ((await readOrder(cfg, account)).commitTime === 0) return outcomeFromChain(cfg, account, commitBlock);
       await sleep(1000);
     }
-    throw new Error("The order was not filled in time; it can be cancelled and its margin returned.");
+    throw new Error("The order was not filled in time; after 60 s it can be cancelled and its margin returned.");
   }
 }
 
-/** What happened at settlement, from the receipt's own events: filled (with the fill price), closed (with the
- * cash returned), or, for opens, rejected with the contract's reason and the margin refunded. */
-export function outcomeFromReceipt(r: Pick<TransactionReceipt, "logs" | "transactionHash"> | null): Outcome | null {
-  if (!r) return null;
+/** Find this account's settlement events since the commit (the keeper sent the transaction). */
+async function outcomeFromChain(cfg: ChainConfig, account: Address, fromBlock: bigint): Promise<Outcome> {
+  const logs = await client.getLogs({ address: cfg.engine, fromBlock, toBlock: "latest" });
+  return outcomeFromLogs(logs, account) ?? noEvent();
+}
+
+const noEvent = (tx?: Hex): Outcome => ({ ok: false, text: "Settled, but no fill event was found; check the transaction.", tx });
+
+/** What happened at settlement, from its own events: filled (fill price), closed (cash returned), or, for
+ * opens, rejected with the contract's reason, the fee kept (margin shortfall only) and the refund. */
+export function outcomeFromLogs(
+  logs: readonly Pick<Log, "data" | "topics" | "transactionHash">[],
+  account: Address,
+  tx?: Hex,
+): Outcome | null {
   const usd = (x: bigint, dp: bigint) =>
     (Number(x) / Number(10n ** dp)).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  for (const log of r.logs) {
+  for (const log of logs) {
     try {
-      const ev = decodeEventLog({ abi: abis.perpEngineAbi, data: log.data, topics: log.topics });
+      const ev = decodeEventLog({ abi: abis.perpEngineAbi, data: log.data, topics: log.topics as [Hex, ...Hex[]] });
+      const who = (ev.args as { account?: Address }).account;
+      if (!who || who.toLowerCase() !== account.toLowerCase()) continue;
+      const hash = tx ?? log.transactionHash ?? undefined;
       if (ev.eventName === "OrderRejected") {
-        const why = decodeErrorResult({ abi: abis.perpEngineAbi, data: ev.args.reason });
-        return { ok: false, text: `Rejected at the fill price (${why.errorName}); your margin was refunded.`, tx: r.transactionHash };
+        const why = decodeErrorResult({ abi: abis.perpEngineAbi, data: ev.args.reason }).errorName;
+        const kept = ev.args.feeKept;
+        return {
+          ok: false,
+          tx: hash,
+          text: kept > 0n
+            ? `Rejected at the fill price (${why}): the $${usd(kept, 6n)} open fee was kept and the rest of your margin refunded.`
+            : `Rejected at the fill price (${why}); your margin was refunded in full.`,
+        };
       }
-      if (ev.eventName === "Opened") {
-        return { ok: true, text: `Filled at $${usd(ev.args.price, 18n)}.`, tx: r.transactionHash };
-      }
+      if (ev.eventName === "Opened") return { ok: true, tx: hash, text: `Filled at $${usd(ev.args.price, 18n)}.` };
       if (ev.eventName === "Closed") {
-        return { ok: true, text: `Closed at $${usd(ev.args.price, 18n)}; $${usd(ev.args.payout, 6n)} returned to your wallet.`, tx: r.transactionHash };
+        return { ok: true, tx: hash, text: `Closed at $${usd(ev.args.price, 18n)}; $${usd(ev.args.payout, 6n)} returned to your wallet.` };
       }
-    } catch { /* another contract's event */ }
+    } catch { /* another event or contract */ }
   }
-  return { ok: false, text: "Settled, but no fill event was found; check the transaction.", tx: r.transactionHash };
+  return null;
 }
 
 export async function openPosition(cfg: ChainConfig, account: Address, sizeBtc: number, marginUsd: number, progress: Progress): Promise<Outcome> {
@@ -95,20 +116,19 @@ export async function openPosition(cfg: ChainConfig, account: Address, sizeBtc: 
     progress("approve", "One-time approval for the engine to take test USDC as margin.");
     await write(account, cfg.usdc, abis.testUsdcAbi, "approve", [cfg.engine, maxUint256]);
   }
-  progress("commit", "Commit the order in your wallet. No price is chosen yet.");
-  await write(account, cfg.engine, abis.perpEngineAbi, "commitOpen", [size, margin]);
-  const r = await fill(cfg, account, progress);
+  progress("commit", "Confirm the order in your wallet. No price is chosen yet.");
+  const c = await write(account, cfg.engine, abis.perpEngineAbi, "commitOpen", [size, margin]);
+  const out = await fill(cfg, account, c.blockNumber, progress);
   progress("done");
-  const pos = await client.readContract({ ...engine(cfg), functionName: "positions", args: [account] });
-  return outcomeFromReceipt(r) ?? (pos[0] !== 0n ? { ok: true, text: "Filled by the keeper." } : { ok: false, text: "Rejected at the fill price; your margin was refunded." });
+  return out;
 }
 
 export async function closePosition(cfg: ChainConfig, account: Address, progress: Progress): Promise<Outcome> {
   progress("commit", "Commit the close in your wallet. Closing is never blocked.");
-  await write(account, cfg.engine, abis.perpEngineAbi, "commitClose", []);
-  const r = await fill(cfg, account, progress);
+  const c = await write(account, cfg.engine, abis.perpEngineAbi, "commitClose", []);
+  const out = await fill(cfg, account, c.blockNumber, progress);
   progress("done");
-  return outcomeFromReceipt(r) ?? { ok: true, text: "Closed by the keeper." };
+  return out;
 }
 
 export async function faucet(cfg: ChainConfig, account: Address) {

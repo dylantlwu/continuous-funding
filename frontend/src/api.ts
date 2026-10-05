@@ -30,7 +30,11 @@ async function call<T>(path: string, init?: RequestInit): Promise<T> {
   return body as T;
 }
 
+/** c, p (per second, 1e18), open interest, vault cash and funding index, sampled by the keeper every 5 minutes. */
+export type MarketSample = { ts: number; block: number; c: string; p: string; longOI: string; shortOI: string; vaultCash: string; fundingIndex: string };
+
 export const api = {
+  market: (hours = 24) => call<{ samples: MarketSample[] }>(`/api/market/history?hours=${hours}`),
   config: () => call<ChainConfig>("/api/chain/config"),
   consensus: () => call<Consensus>("/api/consensus"),
   history: (hours = 24) => call<{ points: RatePoint[] }>(`/api/consensus/history?hours=${hours}`),

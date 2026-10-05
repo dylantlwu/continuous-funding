@@ -68,7 +68,7 @@ export function CadenceChart({ points, now }: { points: RatePoint[]; now: number
           {yTicks.map((v) => (
             <g key={v}>
               <line className="gridline" x1={padL} x2={w - padR} y1={y(v)} y2={y(v)} />
-              <text x={padL - 8} y={y(v) + 4} textAnchor="end">{usd(v)}</text>
+              <text x={padL - 8} y={y(v) + 4} textAnchor="end">{usd(v, hi - lo < 0.1 ? 4 : 2)}</text>
             </g>
           ))}
           {xTicks.map((t) => (

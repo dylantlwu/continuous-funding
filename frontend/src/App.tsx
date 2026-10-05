@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Address } from "viem";
-import { api, pythConf, pythPrice, pythWad, type ChainConfig, type Consensus, type PythPrint } from "./api";
+import { api, pythConf, pythPrice, pythWad, type ChainConfig, type Consensus, type MarketSample, type PythPrint } from "./api";
 import { EXPLORER, client, connect, existingAccount, explain, readAll, type Market, type Mine } from "./chain";
 import { CadenceChart } from "./components/CadenceChart";
 import { PositionCard } from "./components/PositionCard";
@@ -18,6 +18,7 @@ export function App() {
   const [print, setPrint] = useState<PythPrint | null>(null);
   const [market, setMarket] = useState<Market | null>(null);
   const [mine, setMine] = useState<Mine | null>(null);
+  const [samples, setSamples] = useState<MarketSample[]>([]);
   const [account, setAccount] = useState<Address | null>(null);
   const [now, setNow] = useState(Date.now());
   const [busy, setBusy] = useState(false);
@@ -35,8 +36,10 @@ export function App() {
     const hist = () => api.history(24).then((d) => setPoints(d.points)).catch(() => {});
     const cons = () => api.consensus().then(setConsensus).catch(() => {});
     const px = () => api.latest().then(setPrint).catch(() => {});
-    hist(); cons(); px();
-    const ids = [setInterval(hist, 60_000), setInterval(cons, 30_000), setInterval(px, 2_000), setInterval(() => setNow(Date.now()), 1000)];
+    const mkt = () => api.market(24).then((d) => setSamples(d.samples)).catch(() => {});
+    hist(); cons(); px(); mkt();
+    const ids = [setInterval(hist, 60_000), setInterval(cons, 30_000), setInterval(px, 2_000), setInterval(mkt, 300_000),
+                 setInterval(() => setNow(Date.now()), 1000)];
     return () => ids.forEach(clearInterval);
   }, []);
 
@@ -126,7 +129,7 @@ export function App() {
       </section>
 
       <div className="row">
-        <RateCard market={market} consensus={consensus} price={price} />
+        <RateCard market={market} consensus={consensus} price={price} samples={samples} />
         <Ticket cfg={cfg} account={account} mine={mine} price={price} conf={conf} onConnect={onConnect} busy={busy} setBusy={setBusy} />
         <PositionCard cfg={cfg} account={account} mine={mine} price={price} block={market?.block ?? null} busy={busy} setBusy={setBusy} />
       </div>
@@ -143,9 +146,9 @@ export function App() {
           <p>The first BTC print at or after t + 2 s is the only one the contract accepts; Pyth's own contract proves it is the first.</p>
         </div>
         <div>
-          <div className="t">≈ t + 3 s</div>
-          <h3>Anyone settles</h3>
-          <p>You confirm a second time, or the keeper does it ten seconds later at the same price. Fast blocks are what make this feel instant.</p>
+          <div className="t">≈ t + 4 s</div>
+          <h3>The keeper settles</h3>
+          <p>One wallet confirmation per trade: the keeper fills the order at that print a moment later. Anyone can, at the same price. Fast blocks are what make this feel instant.</p>
         </div>
       </section>
 

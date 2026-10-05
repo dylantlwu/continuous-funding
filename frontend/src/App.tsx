@@ -9,7 +9,7 @@ import { Ticket } from "./components/Ticket";
 import type { RatePoint } from "./funding";
 
 const FAUCET = "https://faucet.monad.xyz"; // docs.monad.xyz/developer-essentials/testnets
-const REPO = "https://github.com/"; // set when the public repository exists
+const REPO = "https://github.com/dylantlwu/continuous-funding";
 
 export function App() {
   const [cfg, setCfg] = useState<ChainConfig | null>(null);

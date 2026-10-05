@@ -1,8 +1,9 @@
 # Design: vault-protecting funding on Monad
 
-Status: v2 (2026-10-01), implemented in `src/` (2026-10-03) with the tests listed in §11. Not deployed
-yet. v2 fixes the issues raised by two independent reviews of v1 (one clock instead of two, the free
-oracle option, liquidations blocked by global checks, LP run risk, feed liveness).
+Status: v2 (2026-10-01), implemented in `src/` (2026-10-03) with the tests listed in §11, deployed on
+Monad testnet (2026-10-05; addresses in the README). v2 fixes the issues raised by two independent
+reviews of v1 (one clock instead of two, the free oracle option, liquidations blocked by global checks,
+LP run risk, feed liveness).
 
 ## 1. What this is
 
@@ -145,14 +146,15 @@ bounded and always in the vault's favour (not a tautology from computing one sid
 
 ### 5.4 Consensus feed (`c`)
 
-The relayer reads each venue's live predicted funding normalised to per second and posts the five
-values **only when someone is about to open** (owner, 2026-10-05): the front-end asks for a post when a
-trader clicks open, before the commit, because a commit requires a fresh feed; the keeper posts again
-before settling an open only if the feed has gone stale in between. Closes and liquidations never need
-a post. Between opens, `c` stays at its last posted value and open positions accrue at that value; a post
-changes `c` from its own timestamp onward and never re-prices the past. This trades freshness of `c` for
-cost (on Monad every post is charged at its gas limit, at a 100 gwei floor) and is disclosed. **The median is computed on-chain** (`medianOf`, public), so the relayer cannot post a
-free number: every input it reports is public and attributable to a venue.
+The relayer reads each venue's live predicted funding, normalises it to per second and posts the five values.
+**The median is computed on-chain** (`medianOf`, public). The relayer cannot post a number unrelated to the
+values it reports, but it chooses those values: it is accountable, not trustless. Every reported value is
+public in the feed's events.
+
+When it posts (owner, 2026-10-05): before an open (the front-end asks when a trader clicks open, because a
+commit requires a fresh feed), and again before settling an open only if the feed went stale in between.
+Closes and liquidations never need a post. Between posts, `c` stays at its last value and open positions
+accrue at it; a post changes `c` from its own timestamp onward and never re-prices the past.
 
 `post(market, observedAt, venueRates[5])`:
 - reverts if `msg.sender != relayer`, if `observedAt` is not newer than the last post, is in the future,
@@ -170,10 +172,11 @@ Bounds (owner, 2026-10-03): `cMax` 100% APR, `maxStep` 5% APR per post, slew 5% 
 ±100% takes at least 20 minutes from 0, publicly, whatever the relayer does. The trust gap is
 disclosed: one relayer key, and `c` (up to ±100% APR) is much larger than the on-chain `p` (±5%). The
 relayer can misreport venue values; it cannot hide that it did. Mitigations: on-chain median of logged
-inputs, the slew bound, owner pause and key rotation. Most venues do not serve the history of their
-*predicted* funding, so the recorder's minute-by-minute data is archived publicly; that archive is what
-lets anyone check each reported value afterwards. After the hackathon: several posters, or
-oracle-signed venue funding.
+inputs, the slew bound, and owner pause and key rotation, though today the owner and the relayer are the
+same testnet key, which makes the last two moot until the keys are split. Most venues do not serve the
+history of their *predicted* funding; the recorder keeps it minute by minute, and publishing that archive,
+so anyone can check each reported value afterwards, is planned, not done. After the hackathon: several
+posters, or oracle-signed venue funding.
 
 If no post arrives for 5 minutes the feed counts as stale: `c` stays frozen at its last value (no jump)
 and new opens wait for the next post. Closes and liquidations are never blocked by the feed.
@@ -315,5 +318,4 @@ governance, token, upgradeable proxies; fee tiers; stock and commodity markets; 
 2. Cumulative funding: venues step at their settlement times, ours accrues every second.
 3. A liquidation of a healthy position reverts with `NotLiquidatable`; settling with any print other than
    the first is refused by Pyth; a stale price is rejected; the T4 compile failure.
-4. Contract addresses, verified sources, the relayer's public posts with raw venue values, and the
-   public archive of recorded venue predictions.
+4. Contract addresses, verified sources, and the relayer's public posts with the raw venue values.

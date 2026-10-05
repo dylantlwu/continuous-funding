@@ -14,10 +14,11 @@ import traceback
 from eth_abi import decode
 
 from . import hermes
-from .chain import RpcError, topic
+from .chain import RpcError, selector, topic
 
 T_ORDER = topic("OrderCommitted(address,int256,uint256,bool,uint64)")
 T_OPENED = topic("Opened(address,int256,uint256,uint256,uint256)")
+NOT_LIQUIDATABLE = selector("NotLiquidatable(int256,uint256)").hex()
 PAGE = 100
 
 
@@ -123,8 +124,12 @@ class Keeper:
             fee = self._fee(upd["update"])
             try:
                 self.chain.call(self.engine, "liquidate(address,bytes[])", *args, value=fee, sender=self.chain.address)
-            except RpcError:
-                continue  # healthy (NotLiquidatable) or the price is already too old: nothing to pay for
+            except RpcError as e:
+                # Healthy is the normal answer. Anything else (a price that aged past 3 s, bad data) means a
+                # position near liquidation that the keeper cannot liquidate: say so, never skip silently.
+                if NOT_LIQUIDATABLE not in str(e):
+                    self.log(f"keeper: cannot liquidate {acct} (price published {upd['publish_time']}): {e}")
+                continue
             tx, _ = self.chain.send(self.engine, "liquidate(address,bytes[])", *args, value=fee)
             self.log(f"keeper: liquidated {acct} tx {tx}")
             acted.append(("liquidate", acct, tx))

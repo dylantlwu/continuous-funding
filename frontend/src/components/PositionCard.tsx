@@ -58,7 +58,7 @@ export function PositionCard({ cfg, account, mine, price, block, busy, setBusy }
           <div className="empty">{pending ? "Your order is waiting for its fill price…" : "No position. Open one and watch its funding accrue every block."}</div>
         ) : (
           <>
-            <div className="eyebrow">funding owed since entry, updated every block</div>
+            <div className="eyebrow">funding owed since entry · re-read every block, accrues per second</div>
             <div ref={owedRef} className={`owed ${owed > 0 ? "" : "long"}`}>{usd(owed, 6)}</div>
             <div className="muted" style={{ fontSize: 12.5, marginTop: 4 }}>
               {owed >= 0 ? "you pay this to the vault when you close" : "the vault pays you this when you close"}

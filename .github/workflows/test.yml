@@ -37,6 +37,17 @@ jobs:
       - name: Golden vectors regenerate identically (T10 reference)
         run: python3 -m validation.onchain_ref && git diff --exit-code test/golden
 
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+
+      - name: Front-end types and tests (ABI regenerated from this build)
+        run: |
+          npm ci --prefix frontend
+          node frontend/scripts/gen-abi.mjs
+          npx --prefix frontend tsc -p frontend/tsconfig.json
+          npm test --prefix frontend
+
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"

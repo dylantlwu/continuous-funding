@@ -1,0 +1,29 @@
+{
+  "name": "continuous-funding-frontend",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "abi": "node scripts/gen-abi.mjs",
+    "dev": "vite",
+    "build": "node scripts/gen-abi.mjs && tsc -b && vite build",
+    "test": "vitest run",
+    "dev:fork": "BACKEND=http://127.0.0.1:8790 vite --mode fork --port 5174"
+  },
+  "dependencies": {
+    "@fontsource/dm-mono": "^5.3.0",
+    "@fontsource/hanken-grotesk": "^5.3.0",
+    "@fontsource/instrument-serif": "^5.3.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "viem": "^2.57.3"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.31",
+    "@types/react-dom": "^18.3.7",
+    "@vitejs/plugin-react": "^6.1.2",
+    "typescript": "^5.9.3",
+    "vite": "^8.3.2",
+    "vitest": "^5.0.3"
+  }
+}

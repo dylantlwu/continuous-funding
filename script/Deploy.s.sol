@@ -2,6 +2,7 @@
 pragma solidity 0.8.28;
 
 import {Script, console} from "forge-std/Script.sol";
+import {VmSafe} from "forge-std/Vm.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IPyth} from "@pythnetwork/pyth-sdk-solidity/IPyth.sol";
 import {ConsensusFeed} from "../src/ConsensusFeed.sol";
@@ -12,7 +13,8 @@ import {Usdc} from "../src/lib/Units.sol";
 import {Config} from "./Config.sol";
 
 /// Deploys TestUSDC, ConsensusFeed, PythPriceSource and PerpEngine, seeds the vault, and writes the
-/// addresses to $DEPLOY_OUT (default deployments/monad-testnet.json).
+/// addresses to $DEPLOY_OUT (default deployments/monad-testnet.json) -- only when broadcasting: a simulation
+/// once overwrote the real addresses with ones that were never deployed.
 ///
 ///   forge clean && forge script script/Deploy.s.sol --rpc-url $MONAD_TESTNET_RPC --broadcast --slow \
 ///     --gas-estimate-multiplier 200
@@ -51,6 +53,16 @@ contract Deploy is Script {
         engine.seedVault(Usdc.wrap(Config.VAULT_SEED));
         vm.stopBroadcast();
 
+        console.log("PerpEngine     ", address(engine));
+        console.log("ConsensusFeed  ", address(feed));
+        console.log("PythPriceSource", address(source));
+        console.log("TestUSDC       ", address(usdc));
+        console.log("vault cash     ", Usdc.unwrap(engine.vaultCash()));
+        if (!vm.isContext(VmSafe.ForgeContext.ScriptBroadcast)) {
+            console.log("simulation only: addresses NOT written");
+            return;
+        }
+
         string memory j = "deployment";
         vm.serializeUint(j, "chainId", block.chainid);
         vm.serializeUint(j, "block", block.number);
@@ -63,12 +75,6 @@ contract Deploy is Script {
         vm.serializeAddress(j, "priceSource", address(source));
         string memory json = vm.serializeAddress(j, "perpEngine", address(engine));
         vm.writeJson(json, out);
-
-        console.log("PerpEngine     ", address(engine));
-        console.log("ConsensusFeed  ", address(feed));
-        console.log("PythPriceSource", address(source));
-        console.log("TestUSDC       ", address(usdc));
-        console.log("vault cash     ", Usdc.unwrap(engine.vaultCash()));
         console.log("written to     ", out);
     }
 }

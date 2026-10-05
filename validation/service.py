@@ -9,6 +9,8 @@ Chain (needs PERP_ENGINE, MONAD_RPC; signing needs PRIVATE_KEY = the feed's rela
   GET  /api/pyth/at?t=UNIX    first signed Pyth print at or after t, which settling an order requires
   POST /api/wake              post the venue rates on-chain if the feed is older than 3 minutes (before an open)
 The only endpoint that spends gas is /api/wake, and it posts at most once per 3 minutes whoever calls it.
+PUBLIC_API_ONLY=1 (set on the public domain): only the chain endpoints and /healthz answer; the research
+dashboard and its data stay private (owner, 2026-10-05).
 """
 import json
 import os
@@ -21,6 +23,7 @@ from urllib.parse import parse_qs, urlparse
 from . import hermes, keeper, live_engine, recorder, relayer
 
 CHAIN = None  # set in main() when PERP_ENGINE is configured
+PUBLIC_API_ONLY = os.environ.get("PUBLIC_API_ONLY") == "1"
 CHAIN_CFG = {}
 _wake_seen = {}  # ip -> last wake time
 
@@ -120,6 +123,8 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if CHAIN and u.path.startswith("/api/") and self._chain_get(u.path, q):
                 return None
+            if PUBLIC_API_ONLY and u.path != "/healthz":
+                return self._send(404, "not found", "text/plain")
             if u.path == "/":
                 with open(STATIC, "rb") as f:
                     return self._send(200, f.read(), "text/html; charset=utf-8")

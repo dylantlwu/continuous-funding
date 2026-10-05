@@ -4,6 +4,7 @@
 """
 import http.server
 import os
+import urllib.error
 import sqlite3
 import threading
 import unittest
@@ -151,6 +152,31 @@ class HermesKey(unittest.TestCase):
             thief.shutdown()
             hermes_srv.shutdown()
         self.assertEqual(stolen, [])
+
+
+class PublicDomain(unittest.TestCase):
+    # Without this, putting the API on a public domain would also publish the research dashboard, which the
+    # owner decided to keep private.
+    def test_public_mode_serves_only_chain_endpoints_and_health(self):
+        import urllib.request
+        from validation import service
+        service.PUBLIC_API_ONLY, old = True, service.PUBLIC_API_ONLY
+        srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), service.Handler)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        base = f"http://127.0.0.1:{srv.server_port}"
+
+        def code(path):
+            try:
+                return urllib.request.urlopen(base + path, timeout=5).status
+            except urllib.error.HTTPError as e:
+                return e.code
+        try:
+            self.assertEqual(code("/healthz"), 200)
+            for private in ("/", "/api/markets", "/api/state?base=BTC"):
+                self.assertEqual(code(private), 404, private)
+        finally:
+            service.PUBLIC_API_ONLY = old
+            srv.shutdown()
 
 
 class KeeperSettlement(unittest.TestCase):

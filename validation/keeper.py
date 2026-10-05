@@ -49,11 +49,12 @@ class Keeper:
         head = self.chain.block()[0]
         while self.cursor < head:
             a, b = self.cursor + 1, min(self.cursor + PAGE, head)
-            for lg in self.chain.logs(self.engine, T_ORDER, a, b):
-                *_, settle_at = decode(["int256", "uint256", "bool", "uint64"], bytes.fromhex(lg["data"][2:]))
-                self.pending[_account(lg)] = settle_at
-            for lg in self.chain.logs(self.engine, T_OPENED, a, b):
-                self.db.execute("INSERT OR IGNORE INTO keeper_accounts VALUES (?,?)", (self.engine, _account(lg)))
+            for lg in self.chain.logs(self.engine, [T_ORDER, T_OPENED], a, b):  # either event, one call per page
+                if lg["topics"][0] == T_ORDER:
+                    *_, settle_at = decode(["int256", "uint256", "bool", "uint64"], bytes.fromhex(lg["data"][2:]))
+                    self.pending[_account(lg)] = settle_at
+                else:
+                    self.db.execute("INSERT OR IGNORE INTO keeper_accounts VALUES (?,?)", (self.engine, _account(lg)))
             self.cursor = b
             self.db.execute("INSERT OR REPLACE INTO keeper_cursor VALUES (?,?)", (self.engine, b))
             self.db.commit()

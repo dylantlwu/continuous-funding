@@ -82,7 +82,8 @@ class Chain:
         return int(b["number"], 16), int(b["timestamp"], 16), int(b.get("baseFeePerGas", "0x0"), 16)
 
     def logs(self, address, topic0, from_block, to_block):
-        """Monad's public RPC answers at most 100 blocks per eth_getLogs, so callers page in steps of 100."""
+        """`topic0` is one event topic or a list (any of them). Monad's public RPC answers at most 100 blocks per
+        eth_getLogs, so callers page in steps of 100."""
         return self.rpc("eth_getLogs", [{"address": address, "topics": [topic0],
                                          "fromBlock": hex(from_block), "toBlock": hex(to_block)}])
 

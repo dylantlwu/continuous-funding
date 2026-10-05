@@ -93,7 +93,9 @@ export function App() {
           <span className="tag">BTC-PERP · Monad testnet</span>
         </div>
         <div className="live">
-          <span><span className={`dot ${cBadge?.due ? "stale" : ""}`} />{cBadge ? cBadge.text : "connecting…"}</span>
+          <span style={{ whiteSpace: "nowrap" }} title="c on chain: its age, and its gap to the live five-venue median. While positions are open the keeper posts when the gap reaches 0.25% a year, or hourly.">
+            <span className={`dot ${cBadge?.due ? "stale" : ""}`} />{cBadge ? cBadge.text : "connecting…"}
+          </span>
           <span>BTC {price ? `$${price.toLocaleString("en-US", { maximumFractionDigits: 2 })}` : "—"}</span>
           <span>block {market ? market.block.toLocaleString("en-US") : "—"}</span>
         </div>

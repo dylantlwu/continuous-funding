@@ -75,7 +75,7 @@ describe("c status badge", () => {
   // drifted past the posting threshold would read as fine: the badge must judge c by its gap, not its age.
   it("judges c by its gap to the live median, not by its age", () => {
     const old = cStatus(1_000, 1_000 + 3_000, wad(4), wad(4.1));
-    expect(old.text).toBe("c posted 50 min ago · 0.10% from live median");
+    expect(old.text).toBe("c 50 min old · 0.10% off median");
     expect(old.due).toBe(false);
     expect(cStatus(1_000, 1_030, wad(4), wad(4.3)).due).toBe(true);
   });

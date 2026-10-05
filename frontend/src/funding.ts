@@ -104,7 +104,7 @@ export function cStatus(lastPostS: number, nowS: number, cWad: number, medianWad
   if (!lastPostS) return { text: "c not posted yet", due: true };
   const s = Math.max(0, nowS - lastPostS);
   const age = s < 90 ? `${s} s` : s < 5400 ? `${Math.round(s / 60)} min` : `${(s / 3600).toFixed(1)} h`;
-  if (medianWad == null) return { text: `c posted ${age} ago`, due: false };
+  if (medianWad == null) return { text: `c ${age} old`, due: false };
   const gap = Math.abs(aprPct(medianWad) - aprPct(cWad));
-  return { text: `c posted ${age} ago · ${gap.toFixed(2)}% from live median`, due: gap >= POST_MOVE_APR };
+  return { text: `c ${age} old · ${gap.toFixed(2)}% off median`, due: gap >= POST_MOVE_APR };
 }

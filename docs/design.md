@@ -136,8 +136,13 @@ bounded and always in the vault's favour (not a tautology from computing one sid
 
 ### 5.4 Consensus feed (`c`)
 
-The relayer reads, every minute, each venue's live predicted funding normalised to per second, and posts
-the five values. **The median is computed on-chain** (`medianOf`, public), so the relayer cannot post a
+The relayer reads each venue's live predicted funding normalised to per second and posts the five
+values **only when someone is about to open** (owner, 2026-10-05): the front-end asks for a post when a
+trader clicks open, before the commit, because a commit requires a fresh feed; the keeper posts again
+before settling an open only if the feed has gone stale in between. Closes and liquidations never need
+a post. Between opens, `c` stays at its last posted value and open positions accrue at that value; a post
+changes `c` from its own timestamp onward and never re-prices the past. This trades freshness of `c` for
+cost (on Monad every post is charged at its gas limit, at a 100 gwei floor) and is disclosed. **The median is computed on-chain** (`medianOf`, public), so the relayer cannot post a
 free number: every input it reports is public and attributable to a venue.
 
 `post(market, observedAt, venueRates[5])`:
@@ -161,8 +166,8 @@ inputs, the slew bound, owner pause and key rotation. Most venues do not serve t
 lets anyone check each reported value afterwards. After the hackathon: several posters, or
 oracle-signed venue funding.
 
-If no post arrives for 5 minutes, `c` stays frozen at its last value (no jump) and new opens pause.
-Closes and liquidations are never blocked by the feed.
+If no post arrives for 5 minutes the feed counts as stale: `c` stays frozen at its last value (no jump)
+and new opens wait for the next post. Closes and liquidations are never blocked by the feed.
 
 ## 6. Margin: two types that cannot be mixed
 

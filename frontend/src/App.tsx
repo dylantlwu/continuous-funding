@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Address } from "viem";
 import { api, pythConf, pythPrice, pythWad, type ChainConfig, type Consensus, type PythPrint } from "./api";
-import { EXPLORER, client, connect, explain, readAll, type Market, type Mine } from "./chain";
+import { EXPLORER, client, connect, existingAccount, explain, readAll, type Market, type Mine } from "./chain";
 import { CadenceChart } from "./components/CadenceChart";
 import { PositionCard } from "./components/PositionCard";
 import { RateCard } from "./components/RateCard";
@@ -28,6 +28,7 @@ export function App() {
   printRef.current = print;
 
   useEffect(() => { api.config().then(setCfg).catch((e) => setErr(explain(e))); }, []);
+  useEffect(() => { existingAccount().then((a) => a && setAccount(a)).catch(() => {}); }, []); // no popup on reload
 
   // off-chain data: rate history (chart), live venues, latest Pyth print
   useEffect(() => {

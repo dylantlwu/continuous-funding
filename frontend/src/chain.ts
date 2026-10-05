@@ -45,6 +45,14 @@ export async function connect(): Promise<Address> {
   return account as Address;
 }
 
+/** An account the wallet already authorised for this site, without opening any wallet window. */
+export async function existingAccount(): Promise<Address | null> {
+  if (burner) return null;
+  if (!window.ethereum) return null;
+  const accounts = (await window.ethereum.request({ method: "eth_accounts" })) as Address[];
+  return accounts[0] ?? null;
+}
+
 export async function ensureMonad() {
   if (burner) return;
   const eth = window.ethereum!;
@@ -135,12 +143,14 @@ export type Mine = {
   mon: bigint;
 };
 
-/** Everything the page shows, in one Multicall3 round trip. */
+/** Everything the page shows, in one Multicall3 round trip, all read AT ONE BLOCK: the block number shown next
+ * to a figure is the block that figure comes from, so anyone can re-read it on chain and get the same value. */
 export async function readAll(cfg: ChainConfig, account?: Address, priceWad?: bigint) {
-  const e = { address: cfg.engine, abi: perpEngineAbi } as const;
-  const f = { address: cfg.feed, abi: consensusFeedAbi } as const;
-  const [block, rate, vaultCash, longOI, shortOI, stale, lastPostTime] = await Promise.all([
-    client.getBlockNumber(),
+  const block = await client.getBlockNumber();
+  const at = { blockNumber: block } as const;
+  const e = { address: cfg.engine, abi: perpEngineAbi, ...at } as const;
+  const f = { address: cfg.feed, abi: consensusFeedAbi, ...at } as const;
+  const [rate, vaultCash, longOI, shortOI, stale, lastPostTime] = await Promise.all([
     client.readContract({ ...e, functionName: "currentRate" }),
     client.readContract({ ...e, functionName: "vaultCash" }),
     client.readContract({ ...e, functionName: "longOI" }),
@@ -150,14 +160,14 @@ export async function readAll(cfg: ChainConfig, account?: Address, priceWad?: bi
   ]);
   const market: Market = { rate, vaultCash, longOI, shortOI, stale, lastPostTime: BigInt(lastPostTime), block };
   if (!account) return { market, mine: null };
-  const u = { address: cfg.usdc, abi: testUsdcAbi } as const;
+  const u = { address: cfg.usdc, abi: testUsdcAbi, ...at } as const;
   const [position, order, liquidationPrice, usdc, allowance, mon, value] = await Promise.all([
     client.readContract({ ...e, functionName: "positions", args: [account] }),
     client.readContract({ ...e, functionName: "orders", args: [account] }),
     client.readContract({ ...e, functionName: "liquidationPrice", args: [account] }),
     client.readContract({ ...u, functionName: "balanceOf", args: [account] }),
     client.readContract({ ...u, functionName: "allowance", args: [account, cfg.engine] }),
-    client.getBalance({ address: account }),
+    client.getBalance({ address: account, ...at }),
     priceWad ? client.readContract({ ...e, functionName: "positionValue", args: [account, priceWad] }) : null,
   ]);
   const mine: Mine = {

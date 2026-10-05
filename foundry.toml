@@ -11,7 +11,7 @@ remappings = [
   "@openzeppelin/contracts/=lib/openzeppelin-contracts/contracts/",
   "@pythnetwork/pyth-sdk-solidity/=lib/pyth-sdk-solidity/",
 ]
-fs_permissions = [{ access = "read", path = "./test/golden" }]
+fs_permissions = [{ access = "read", path = "./test/golden" }, { access = "read-write", path = "./deployments" }]
 
 [fuzz]
 runs = 1000

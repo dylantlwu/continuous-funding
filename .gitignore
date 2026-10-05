@@ -24,3 +24,5 @@ dist/
 # validation engine: cached exchange data and generated reports
 validation/data/
 validation/reports/
+# local fork rehearsals; real testnet deployments are committed
+deployments/local*.json

@@ -7,7 +7,8 @@ form picked the wrong branch, the wrong sign or the wrong clock, the two would d
 than the rounding dust the test allows.
 
 Spec constants are the contract's integers (rates per second x1e18):
-  w = 5% APR = 1_585_489_599, V = 2% APR per hour at full imbalance = 176_166 per second^2.
+  w = 5% APR = 1_585_489_599, V = 2% APR per hour at full imbalance = 176_166 per second^2,
+  full imbalance = 40 BTC (all from script/Config.sol).
 
 Usage: python3 -m validation.onchain_ref  -> writes test/golden/funding_vectors.json
 """
@@ -20,7 +21,7 @@ WAD = 10**18
 YEAR = 365 * 86400
 W = 1_585_489_599
 V = 176_166
-SKEW_SCALE = 100 * WAD
+SKEW_SCALE = 40 * WAD                         # script/Config.sol SKEW_SCALE
 APR_1PCT = WAD // 100 // YEAR  # same integer as the Solidity tests
 
 

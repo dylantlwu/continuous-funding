@@ -108,7 +108,7 @@ contract FundingCoreTest is Test {
     function test_T7_engineSlopeFollowsSkew() public {
         _post(0);
         eng.h_touch(PRICE);
-        eng.h_setOI(0, 50e18); // half imbalance, shorts heavy: p falls at V/2
+        eng.h_setOI(0, 20e18); // half of the 40 BTC scale, shorts heavy: p falls at V/2
         vm.warp(block.timestamp + 3600);
         eng.h_touch(PRICE);
         assertEq(eng.premium(), -(V / 2) * 3600);

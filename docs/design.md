@@ -50,12 +50,16 @@ and the data used to choose its parameters.
 
 | Contract | Responsibility |
 |---|---|
-| `PerpEngine` | Vault cash (seeded by the owner, no LP shares in v1), BTC market, isolated positions, funding index, liquidation. One contract so all cash is in one place and conservation is checkable. |
+| `PerpEngine` | Vault cash (seeded by the owner, no LP shares in v1), BTC market, isolated positions, two-step orders, funding index, liquidation. One contract so all cash is in one place and conservation is checkable. |
 | `ConsensusFeed` | Receives `c` from the relayer, clamps it to bounds, keeps a cumulative integral of `c` over time. Separate so the trust boundary is explicit. |
-| `PythPriceSource` | Adapter over the Pyth pull oracle behind `IPriceSource`, so it can be swapped for Pyth Pro or Supra. |
+| `PythPriceSource` | Adapter over the Pyth pull oracle behind `IPriceSource`: the latest price (bots) and the first price at or after a given time (order settlement), so it can be swapped for Pyth Pro or another source. |
 | `TestUSDC` | 6-decimal ERC-20 with an open faucet, testnet only. |
 
 No proxies, no governance, no token. The `owner` can pause new opens and rotate the relayer.
+
+Off-chain, two services, both replaceable by anyone: the **relayer** posts venue rates to
+`ConsensusFeed`; the **keeper** settles orders, liquidates and pokes. The keeper holds the Pyth API key,
+so the browser never does (Pyth's terms require keeping the key out of front-ends).
 
 ## 4. Units, precision and types
 
@@ -173,27 +177,41 @@ asserts the compiler error. Parameters: 10x max leverage, 5% maintenance margin.
 
 ## 7. Prices, trading and liquidation
 
-**Narrowing and pricing the free oracle option.** With a pull oracle the caller chooses which signed
-price to submit. Left open, a trader can pick the stale stored price or a fresh one, whichever pays, and
-a liquidator can pick a wick. The option cannot be removed without a two-step (request, then execute at
-a later price) flow; v1 narrows it and makes it cost money:
-- each market stores the last used `publishTime`; a submitted price must not be older than it (through
-  Pyth this is already true, since Pyth never stores an older price over a newer one);
-- every price, for trades and liquidations alike, must be at most 3 seconds old (owner, 2026-10-03:
-  liquidators get no wider window than traders);
-- trades execute at the oracle price moved by its confidence interval **against the trader**: buying
-  (open long, close short) at price + conf, selling at price − conf. A spread that widens exactly when
-  the oracle is unsure, which is when picking a stale print would pay;
-- an open and close fee (5 bp of notional, to the vault);
-- liquidation checks health at the confidence-adjusted price in the trader's favour (long: price + conf,
-  short: price − conf), so a wide-confidence wick cannot liquidate a healthy position.
+**Closing the free oracle option with two-step orders (owner, 2026-10-05).** With a pull oracle the
+caller chooses which signed price to submit. In a one-step design a trader can pick, within the
+allowed age, whichever print pays best. A one-step window short enough to make that worthless (3 s) does
+not work for people: measured from the builder's machine, fetching a Pyth update took 3–5 s and a Monad
+RPC call 2–3 s, before anyone confirms in a wallet. So trades are two-step, as in Synthetix v3:
+1. the trader **commits** (`commitOpen(size, margin)` or `commitClose()`): no price, the margin goes
+   into escrow;
+2. anyone **settles** (`settle(account, update)`) with the first Pyth print published at or after
+   `commitTime + 2 s`. The contract asks Pyth to prove it is the first (`parsePriceFeedUpdatesUnique`:
+   publishTime ≥ the fill time and the previous print before it), so neither the trader nor the settler
+   has any choice of price. Checked against the Monad testnet Pyth contract: the first print fills, a
+   later print is refused.
 
-What remains: in a fast market where a 3-second move exceeds about 10 bp plus twice the confidence
-interval, opening on a print up to 3 s old and closing on the latest one still pays. Disclosed.
+The 2-second delay means the trader cannot have seen the fill price when signing. An open that fails its
+checks at the fill price (margin, vault capacity, confidence, a pause, a stale feed) is **rejected and
+refunded** rather than reverted, so no order can block the queue. Running out of gas inside that check
+reverts the whole settlement instead of rejecting, so a trader settling their own order cannot refuse an
+unfavourable fill by under-funding gas (the 63/64 rule already prevents it at today's costs; the check
+keeps it so). An order nobody settles within 60 s can be cancelled and its margin returned; the keeper
+settles every order, and anyone else can. Residual, disclosed: if every keeper is down, a trader can let
+an unfavourable order expire.
 
-Tight freshness windows are practical because Monad includes a transaction within about a second;
-on slower chains a 3-second window would make normal trades fail. This is the most concrete "why
-Monad" in the design.
+Trades also execute at the oracle price moved by its confidence interval **against the trader**: buying
+(open long, close short) at price + conf, selling at price − conf, plus a 5 bp open and close fee.
+
+**Bots use the latest price.** Liquidation and `poke` take the latest Pyth price: no older than the last
+price used, at most 3 seconds old (owner, 2026-10-03: liquidators get no wider window than traders).
+Liquidation checks health at the confidence-adjusted price in the trader's favour (long: price + conf,
+short: price − conf), so a wide-confidence wick cannot liquidate a healthy position. Whether a keeper
+meets 3 s from its host must be measured on the deployed keeper before launch.
+
+**Why Monad.** Two-step settlement is standard; what Monad changes is how it feels. A commit lands in
+about a second and the keeper can settle about a second after the fill time, so a trade fills a few
+seconds after the click, at a price no one chose. With 2-second blocks the same flow takes several
+blocks, and with 12-second blocks it is unusable for active trading.
 
 Positions must be at least 0.001 BTC, so no dust position can sit unliquidatable and block the owner's
 withdrawal.
@@ -234,17 +252,18 @@ the `Shortfall`). Any remaining equity goes to the vault.
 Monad charges the gas **limit**. The frontend sends fixed per-function limits from
 `forge test --gas-report` plus a small margin. Every call touches one market; accrual is O(1).
 
-Measured by `forge test --gas-report` with mock price sources (so **excluding** Pyth's signature
-verification, which must be measured on testnet with real update payloads before the limits are
-fixed), max over all test runs: `open` 433,540 · `close` 199,019 · `liquidate` 220,675 · `poke` 180,242 ·
-`addMargin` 53,809 · feed `post` 80,696.
+Measured on a fork of Monad testnet against the real Pyth contract with real Hermes updates
+(`script/rehearse-fork.sh`, EVM gas rules; the limits are fixed from testnet receipts after deployment):
+`commitOpen` 190,243 · `settle` (open) 414,476 · `commitClose` 71,786 · `settle` (close) 361,653 · feed
+`post` 86,021.
 
 ## 10. Decisions
 
 Decided by the owner (2026-10-01 to 10-03): `w` 5% APR; velocity 2% APR per hour at full imbalance;
 Pyth; the feed bounds and on-chain median (§5.4); the rounding rule (§4); the capacity rule at 25%
-(§8); `VaultInsolvent` kept and disclosed; execution at price ± conf; one 3-second price window;
-minimum size 0.001 BTC; liquidation reward paid by the vault, remaining equity to the vault.
+(§8); `VaultInsolvent` kept and disclosed; execution at price ± conf; two-step orders filled at the
+first Pyth print 2 s after commit, cancellable after 60 s (§7); a 3-second window for the latest-price
+paths; minimum size 0.001 BTC; liquidation reward paid by the vault, remaining equity to the vault.
 
 Still provisional: fees (5 bp open/close, 0.5% liquidation); `skewScale` for the demo; scope cuts
 (owner-seeded vault without LP shares, BTC only, no partial close, no remove-margin, owner pause instead
@@ -265,8 +284,9 @@ arbitrage profit, `w` and cost sweeps, comparison with the velocity-only rule an
 | T8 | Extreme sizes and prices: no overflow; rounding always against the trader. |
 | T9 | Feed: unauthorised, out-of-order, future, too-old or same-second posts revert; the applied rate is the on-chain median; out-of-range values are clamped; the bound holds over time (5% APR per minute), not just per post; the integral switches at the post's timestamp. |
 | T10 | Golden vectors: the Python reference and the contract produce the same funding for a recorded scenario. |
-| T11 | Oracle option: any price older than 3 s or older than the last used price reverts, for liquidations too; trades execute at price ± conf against the trader. |
+| T11 | Latest-price paths (liquidate, poke): any price older than 3 s or older than the last used price reverts; trades execute at price ± conf against the trader. |
 | T12 | Vault capacity: open interest cannot be stacked on one side by opening and closing hedge legs; capacity is net of unrealised profit already owed. |
+| T13 | Two-step orders: only the first Pyth print at or after commit + 2 s fills (earlier and non-first prints are refused); a pinned fill does not rewind the latest price; expired orders can only be cancelled; one order per account; liquidation clears a pending close; no gas limit turns a fill into a rejection; failed opens are refunded. |
 
 ## 12. Deliberately not doing
 
@@ -275,10 +295,11 @@ governance, token, upgradeable proxies; fee tiers; stock and commodity markets; 
 
 ## 13. What a judge sees in the demo
 
-1. A trader opens a large one-sided position; on the next touches `p` moves; the dashboard shows
-   `rate = c + p` with `c` from five venues and the ±5% band.
+1. A trader commits a large one-sided position from a wallet and it fills a few seconds later at the
+   first Pyth print after commit + 2 s (shown next to that print); on the next touches `p` moves; the
+   dashboard shows `rate = c + p` with `c` from five venues and the ±5% band.
 2. Cumulative funding: venues step at their settlement times, ours accrues every second.
-3. A liquidation of a healthy position reverts with `NotLiquidatable`; a stale price is rejected; the
-   T4 compile failure.
+3. A liquidation of a healthy position reverts with `NotLiquidatable`; settling with any print other than
+   the first is refused by Pyth; a stale price is rejected; the T4 compile failure.
 4. Contract addresses, verified sources, the relayer's public posts with raw venue values, and the
    public archive of recorded venue predictions.

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { approxLiquidationPrice, aprPct, cadences, marginFor, nextSettlement, type RatePoint } from "./funding";
+import { approxLiquidationPrice, aprPct, cadences, cStatus, marginFor, nextSettlement, type RatePoint } from "./funding";
 
 const H = 3_600_000;
 const tenPctPerSecond = (0.1 / (365 * 24 * 3600)) * 1e18; // 10% APR as a per-second rate, 1e18
@@ -66,5 +66,17 @@ describe("pre-trade estimates", () => {
     expect(10_000 + (p - 100_000)).toBeCloseTo(0.05 * p, 6);
     const s = approxLiquidationPrice(-1, 100_000, 10_000);
     expect(10_000 - (s - 100_000)).toBeCloseTo(0.05 * s, 6);
+  });
+});
+
+describe("c status badge", () => {
+  const wad = (apr: number) => (apr / 100) * 1e18 / (365 * 24 * 3600);
+  // Without this, an hour-old c (normal under the move-or-hourly policy) would read as a fault, or a c that has
+  // drifted past the posting threshold would read as fine: the badge must judge c by its gap, not its age.
+  it("judges c by its gap to the live median, not by its age", () => {
+    const old = cStatus(1_000, 1_000 + 3_000, wad(4), wad(4.1));
+    expect(old.text).toBe("c posted 50 min ago · 0.10% from live median");
+    expect(old.due).toBe(false);
+    expect(cStatus(1_000, 1_030, wad(4), wad(4.3)).due).toBe(true);
   });
 });

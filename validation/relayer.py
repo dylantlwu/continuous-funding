@@ -1,5 +1,6 @@
-"""Relayer: posts the five venues' live predicted funding to ConsensusFeed, ONLY before an open
-(owner decision 2026-10-05; docs/design.md §5.4). The median is computed on-chain; this only reports inputs.
+"""Relayer: posts the five venues' live predicted funding to ConsensusFeed: before an open, and while positions
+are open whenever their median has moved 0.25% a year from c on chain or an hour has passed (owner decisions
+2026-10-05; docs/design.md §5.4). The median is computed on-chain; this only reports inputs.
 
 Rates come from the recorder's SQLite (validation/recorder.py): a venue counts only if its last successful poll
 is recent; otherwise it is reported as MISSING, and the contract needs at least three venues.
@@ -19,8 +20,9 @@ _post_lock = threading.Lock()
 
 def median_like_contract(values):
     """ConsensusFeed.medianOf on the venues present: None below three; even count = mean of the middle two,
-    rounded toward zero. Only for display history (one on-chain call per minute of history would be absurd);
-    test/golden/median_vectors.json makes the Solidity suite check this against the contract itself."""
+    rounded toward zero. For display history (one on-chain call per minute of history would be absurd) and for
+    the relayer's deviation trigger; test/golden/median_vectors.json makes the Solidity suite check this against
+    the contract itself."""
     a = sorted(values)
     n = len(a)
     if n < MIN_VENUES:
@@ -84,15 +86,24 @@ def venue_rates(db, now_ms, max_age_ms=MAX_DELAY_S * 1000):
     return rates, (min(observed) if observed else None), detail
 
 
-def post_if_needed(chain, feed, db, now_ms, min_age_s=180):
+def post_if_needed(chain, feed, db, now_ms, min_age_s=180, move_wad=None):
     """Post unless the feed was posted within `min_age_s`. 180 s leaves a trader at least two minutes to
     confirm the commit before the feed (stale after 300 s) would refuse it, and caps a flood of wake calls at
-    one post per three minutes. Raises (never posts a partial or stale set) if fewer than three venues are fresh."""
+    one post per three minutes. Raises (never posts a partial or stale set) if fewer than three venues are fresh.
+
+    With `move_wad` (the keeper, while positions are open) it also posts inside that window once the median is
+    at least `move_wad` from c on chain: a deviation trigger plus a heartbeat, as push oracles do. The median is
+    first held to the feed's ±cMax, or a median beyond the cap would trigger a post on every check."""
     with _post_lock:
         last = chain.call(feed, "lastPostTime(uint8)", ["uint8"], [0], ["uint64"])[0]
         _, block_ts, _ = chain.block()
+        gap = None
         if last and block_ts - last < min_age_s:
-            return {"posted": False, "age_s": block_ts - last}
+            if move_wad is None:
+                return {"posted": False, "age_s": block_ts - last}
+            gap = _gap_to_chain(chain, feed, venue_rates(db, now_ms)[0])
+            if gap is None or abs(gap) < move_wad:  # too few venues: the heartbeat post will say so, loudly
+                return {"posted": False, "age_s": block_ts - last, "gap_wad": gap}
         rates, observed_ms, detail = venue_rates(db, now_ms)
         present = sum(r != MISSING for r in rates)
         if present < MIN_VENUES:
@@ -101,4 +112,14 @@ def post_if_needed(chain, feed, db, now_ms, min_age_s=180):
         tx, receipt = chain.send(feed, "post(uint8,uint64,int256[5])", ["uint8", "uint64", "int256[5]"],
                                  [0, observed_at, rates], gas_factor=1.05)  # gas is the same every post
         return {"posted": True, "tx": tx, "gas_charged": int(receipt["gasUsed"], 16), "venues": detail,
-                "observed_at": observed_at}
+                "observed_at": observed_at, "gap_wad": gap}
+
+
+def _gap_to_chain(chain, feed, rates):
+    """The venues' median, held to ±cMax as the feed would hold it, minus c on chain. None below three venues."""
+    median = median_like_contract([r for r in rates if r != MISSING])
+    if median is None:
+        return None
+    c_max = chain.call(feed, "cMax()", out=["int256"])[0]
+    on_chain = chain.call(feed, "rate(uint8)", ["uint8"], [0], ["int256"])[0]
+    return max(-c_max, min(c_max, median)) - on_chain

@@ -125,6 +125,48 @@ class Wake(unittest.TestCase):
         self.assertEqual(c.sent, [])
 
 
+class DeviationTrigger(unittest.TestCase):
+    """The keeper's policy while positions are open: post when the median moves, or hourly (owner, 2026-10-05)."""
+    MEDIAN = relayer.per_second_wad(0.0001, 8)  # every venue in SNAPS: 10.95% a year
+    MOVE = keeper.POST_MOVE_WAD                 # 0.25% a year
+
+    def post(self, on_chain, c_max=10**18, last_post=10_000 - 600, ts=10_000):
+        c = FakeChain({"lastPostTime(uint8)": (last_post,), "rate(uint8)": (on_chain,), "cMax()": (c_max,)}, ts=ts)
+        res = relayer.post_if_needed(c, "feed", recorder_db([(9_990_000, v) for v, _ in relayer.VENUES], SNAPS),
+                                     now_ms=10_000_000, min_age_s=3595, move_wad=self.MOVE)
+        return res, c.sent
+
+    # Without this, every 30-second check would post: back to a timer, at 6.65 MON a day or worse.
+    def test_a_small_move_inside_the_hour_does_not_post(self):
+        res, sent = self.post(on_chain=self.MEDIAN - self.MOVE + 1)
+        self.assertFalse(res["posted"])
+        self.assertEqual(sent, [])
+
+    # Without this, a jump in the venues would wait up to an hour to reach c (a 60-minute move has been 3.6% a
+    # year), and open positions would accrue at the old rate meanwhile.
+    def test_a_move_of_the_threshold_posts_before_the_hour(self):
+        res, sent = self.post(on_chain=self.MEDIAN - self.MOVE)
+        self.assertTrue(res["posted"])
+        self.assertEqual(res["gap_wad"], self.MOVE)
+        self.assertEqual(sent[0][0], "post(uint8,uint64,int256[5])")
+
+    # Without this, a quiet market would leave c unposted for good, and nothing on chain would show the relayer
+    # is still alive.
+    def test_posts_after_an_hour_even_without_a_move(self):
+        res, sent = self.post(on_chain=self.MEDIAN, last_post=10_000 - 3595)
+        self.assertTrue(res["posted"])
+        self.assertIsNone(res["gap_wad"], "posted for age, not for a move")
+
+    # Without this, venues beyond the ±cMax cap would keep the gap open for good (the feed holds c at the cap),
+    # and the relayer would post on every check until its MON ran out.
+    def test_a_median_beyond_the_cap_does_not_post_again_and_again(self):
+        cap = relayer.per_second_wad(0.0001, 8) // 2  # cap below the median, c already at the cap
+        res, sent = self.post(on_chain=cap, c_max=cap)
+        self.assertFalse(res["posted"])
+        self.assertEqual(res["gap_wad"], 0)
+        self.assertEqual(sent, [])
+
+
 class HermesKey(unittest.TestCase):
     # Without this, a redirect from the Hermes host would make urllib resend the Authorization header (our Pyth
     # API key) to whatever host the redirect names.
@@ -227,7 +269,8 @@ class KeeperSettlement(unittest.TestCase):
                    "isStale(uint8)": (stale,), "updateFee(bytes[])": (1,)}
         c = FakeChain(answers, ts=ts, reverts=reverts)
         posts = []
-        k = keeper.Keeper(c, "0xengine", sqlite3.connect(":memory:"), lambda min_age_s: posts.append(min_age_s),
+        k = keeper.Keeper(c, "0xengine", sqlite3.connect(":memory:"),
+                          lambda min_age_s, move_wad=None: posts.append(min_age_s if move_wad is None else (min_age_s, move_wad)),
                           start_block=1, log=lambda *a: None)
         k.pending["0xabc"] = 1_002  # committed at 1_000, fills at the first print at or after 1_002
         self.pinned = []
@@ -298,7 +341,8 @@ class KeeperSettlement(unittest.TestCase):
         k._last_post_check = 0
         c.answers["shortOI()"] = (5 * 10**17,)
         k.keep_c_fresh()
-        self.assertEqual(posts, [115], "positions open: post when c is older than about 2 minutes")
+        self.assertEqual(posts, [(3595, keeper.POST_MOVE_WAD)],
+                         "positions open: post on a 0.25%-a-year move, or when c is about an hour old")
 
     # Without this, an order nobody settled in time would keep the trader's margin in escrow forever.
     def test_cancels_expired_orders_so_the_margin_goes_back(self):

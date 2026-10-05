@@ -94,3 +94,17 @@ export function countdown(ms: number): string {
   const two = (n: number) => String(n).padStart(2, "0");
   return h > 0 ? `${h}:${two(m)}:${two(sec)}` : `${two(m)}:${two(sec)}`;
 }
+
+/** The keeper posts c once the venues' median is this far from it (or hourly) while positions are open. */
+export const POST_MOVE_APR = 0.25;
+
+/** Header status of c: how old the on-chain value is and how far it sits from the live median. An hour-old c is
+ * normal under the posting policy; what matters is the gap, so the badge shows the gap, not "fresh" or "stale". */
+export function cStatus(lastPostS: number, nowS: number, cWad: number, medianWad: number | null) {
+  if (!lastPostS) return { text: "c not posted yet", due: true };
+  const s = Math.max(0, nowS - lastPostS);
+  const age = s < 90 ? `${s} s` : s < 5400 ? `${Math.round(s / 60)} min` : `${(s / 3600).toFixed(1)} h`;
+  if (medianWad == null) return { text: `c posted ${age} ago`, due: false };
+  const gap = Math.abs(aprPct(medianWad) - aprPct(cWad));
+  return { text: `c posted ${age} ago · ${gap.toFixed(2)}% from live median`, due: gap >= POST_MOVE_APR };
+}

@@ -4,7 +4,7 @@
 It settles every order as soon as the first Pyth print at or after its fill time exists (owner, 2026-10-05:
 one wallet confirmation per trade; anyone else may settle first, at the same pinned price). It cancels orders
 past their deadline so the margin goes back. While there is open interest or a pending order it asks the
-relayer to post c every 2 minutes. It liquidates only positions that a free eth_call simulation says are
+relayer to post c once the venues' median has moved 0.25% a year from c on chain, and at least hourly. It liquidates only positions that a free eth_call simulation says are
 liquidatable, so it never pays for a transaction that would revert. Every 5 minutes it samples c, p, open
 interest and vault cash with free reads, for the market history chart.
 
@@ -23,6 +23,12 @@ T_ORDER = topic("OrderCommitted(address,int256,uint256,bool,uint64)")
 T_OPENED = topic("Opened(address,int256,uint256,uint256,uint256)")
 NOT_LIQUIDATABLE = selector("NotLiquidatable(int256,uint256)").hex()
 PAGE = 100
+# Owner, 2026-10-05: post c on a 0.25%-a-year move or hourly, not on a 2-minute timer. Replayed on 24 h of minute
+# medians: about 117 posts a day instead of 720 (1.1 MON instead of 6.7 at 0.0092 MON a post), and the worst gap
+# between c and the median falls from 1.34% to 0.25% a year, since a jump is posted at the next check.
+YEAR_S = 31_536_000
+POST_MOVE_WAD = round(0.0025 * 10**18 / YEAR_S)
+POST_HEARTBEAT_S = 3600
 
 
 def _account(log):
@@ -30,8 +36,8 @@ def _account(log):
 
 
 class Keeper:
-    def __init__(self, chain, engine, db, post_if_needed, start_block, grace_s=0, log=None, post_every_s=120,
-                 sample_every_s=300):
+    def __init__(self, chain, engine, db, post_if_needed, start_block, grace_s=0, log=None,
+                 heartbeat_s=POST_HEARTBEAT_S, move_wad=POST_MOVE_WAD, sample_every_s=300):
         self.chain, self.engine, self.db, self.post_if_needed = chain, engine, db, post_if_needed
         self.log = log or (lambda *a: print(*a, flush=True))  # unbuffered: a keeper action must show at once
         self.grace_s = grace_s
@@ -47,7 +53,7 @@ class Keeper:
         self.cursor = row[0] if row else start_block - 1
         self.pending = {}  # account -> fill time (commitTime + settleDelay)
         self._last_liq = 0.0
-        self.post_every_s, self.sample_every_s = post_every_s, sample_every_s
+        self.heartbeat_s, self.move_wad, self.sample_every_s = heartbeat_s, move_wad, sample_every_s
         self._last_post_check = 0.0
         self._last_sample = 0.0
         db.execute("CREATE TABLE IF NOT EXISTS market_samples(engine TEXT, ts INTEGER, block INTEGER, c TEXT, p TEXT, "
@@ -156,15 +162,16 @@ class Keeper:
         return (c(self.engine, "longOI()", out=["uint256"])[0], c(self.engine, "shortOI()", out=["uint256"])[0])
 
     def keep_c_fresh(self):
-        """Post c at most every `post_every_s` while anything accrues or waits to fill; never when the book is
-        empty (nothing accrues, and every post is charged at its gas limit)."""
+        """While anything accrues or waits to fill, post c once the median is `move_wad` away from it or c is
+        `heartbeat_s` old; never when the book is empty (nothing accrues, and every post is charged at its gas
+        limit). Checked every 30 s; the recorder reads the venues every minute."""
         if time.time() - self._last_post_check < 30:
             return None
         self._last_post_check = time.time()
         long_oi, short_oi = self._open_interest()
         if long_oi + short_oi == 0 and not self.pending:
             return None
-        return self.post_if_needed(min_age_s=self.post_every_s - 5)
+        return self.post_if_needed(min_age_s=self.heartbeat_s - 5, move_wad=self.move_wad)
 
     def sample(self, now_ts, block):
         if time.time() - self._last_sample < self.sample_every_s:
@@ -184,7 +191,8 @@ class Keeper:
         acted = self.settle_due(now_ts)
         posted = self.keep_c_fresh()
         if posted and posted.get("posted"):
-            self.log(f"keeper: posted c (positions open) tx {posted['tx']}")
+            why = "hourly" if posted.get("gap_wad") is None else f"median moved {posted['gap_wad'] * YEAR_S / 1e16:+.3f}%/yr"
+            self.log(f"keeper: posted c (positions open, {why}) tx {posted['tx']}")
         if time.time() - self._last_liq >= 5:
             self._last_liq = time.time()
             acted += self.check_liquidations()

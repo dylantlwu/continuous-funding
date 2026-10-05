@@ -151,9 +151,17 @@ The relayer reads each venue's live predicted funding, normalises it to per seco
 values it reports, but it chooses those values: it is accountable, not trustless. Every reported value is
 public in the feed's events.
 
-When it posts (owner, 2026-10-05, revised after the fourth review): every 2 minutes while there is open
-interest or a pending order, and before an open when the feed is older than 3 minutes (a commit requires a
-fresh feed). With no positions it does not post: nothing accrues, and every post is charged at its gas limit.
+When it posts (owner, 2026-10-05): before an open when the feed is older than 3 minutes (a commit requires a
+fresh feed), and, while there is open interest or a pending order, whenever the venues' median has moved 0.25%
+a year from `c` on chain, or at least hourly. The keeper checks every 30 seconds for free, off chain; the median
+is first held to ±`cMax`, or venues beyond the cap would trigger a post on every check. A 2-minute timer came
+first and was replaced the same day: each post costs about 0.0092 MON (90,509 gas, charged at the limit), so 720
+a day is 6.65 MON. Replayed on 24 hours of the recorder's minute medians, move-or-hourly posts about 117 times a
+day (about 1.1 MON), and the worst gap between `c` and the median falls from 1.34% to 0.25% a year, since a
+jump is posted at the next check instead of waiting for the timer. A 0.25% gap is not worth farming: against
+the 10 bp round-trip fee it takes about 146 days to break even. Reproduce with
+`python3 script/replay_posting.py` (the day of medians is saved in `docs/data/`). With no positions it does not post: nothing
+accrues, and every post is charged at its gas limit.
 Between posts, `c` stays at its last value and open positions accrue at it; a post changes `c` from its own
 timestamp onward and never re-prices the past.
 
@@ -295,7 +303,7 @@ Pyth; the feed bounds and on-chain median (§5.4); the rounding rule (§4); the 
 first Pyth print 2 s after commit, cancellable after 60 s (§7); a 3-second window for the latest-price
 paths; minimum size 0.001 BTC; liquidation reward paid by the vault, remaining equity to the vault.
 After the fourth review (2026-10-05): the feed's bound is on change over time only (no per-post step);
-`c` is posted every 2 minutes while there is open interest; at most 10 BTC per account; a margin-shortfall
+`c` is posted while there is open interest, on a 0.25%-a-year move or hourly; at most 10 BTC per account; a margin-shortfall
 rejection keeps the open fee; the keeper settles orders as soon as the print exists (one wallet
 confirmation per trade); the faucet stays open.
 

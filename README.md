@@ -30,7 +30,7 @@ This project anchors to the market and adds a bounded, memoryful premium:
 
 | Term | What it is | How it moves |
 |---|---|---|
-| `c` | Median of Binance, OKX, Bybit, Hyperliquid and Bitget predicted funding, normalised to per second. The median is computed on chain from the five reported values. | Limited to ±100% a year and to 5% a year per minute of change, measured over time: one post after a quiet spell catches up as far as the elapsed time allows. Posted every 2 minutes while positions are open, and before an open. |
+| `c` | Median of Binance, OKX, Bybit, Hyperliquid and Bitget predicted funding, normalised to per second. The median is computed on chain from the five reported values. | Limited to ±100% a year and to 5% a year per minute of change, measured over time: one post after a quiet spell catches up as far as the elapsed time allows. Posted before an open, and while positions are open whenever the median moves 0.25% a year from it, or at least hourly. |
 | `p` | This market's own imbalance premium. | `dp/dt = 2% a year per hour × clamp(skew / 40 BTC, ±1)`, bounded to ±5% a year. It keeps moving while the imbalance lasts. |
 
 While one side dominates, `p` makes that side pay more and the other side earn more. That pays hedgers to
@@ -181,7 +181,7 @@ forge clean && forge script script/Deploy.s.sol --rpc-url $MONAD_TESTNET_RPC --b
   relayer reports the five venue values: the contract takes their median and bounds the result, and every
   value is public in the feed's events. So the relayer is accountable, not trustless: it can misreport within
   the bounds, but not hide that it did. The owner can pause new opens and rotate the relayer, and nothing more.
-- **Freshness of `c`.** Between posts (every 2 minutes while positions are open), `c` stays at its last value,
+- **Freshness of `c`.** Between posts (on a 0.25%-a-year move or hourly while positions are open), `c` stays at its last value,
   and a post never re-prices the past. With no positions the relayer does not post.
 - **Capacity can be occupied.** A hedged pair of accounts fills capacity without funding cost; the 10 BTC
   per-account cap makes that take many funded addresses, and a borrow fee (not implemented) would make it

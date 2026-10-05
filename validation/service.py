@@ -209,10 +209,11 @@ def chain_setup():
 def keeper_loop():
     db = recorder.open_db()
     k = keeper.Keeper(CHAIN, CHAIN_CFG["engine"], db,
-                      lambda min_age_s: relayer.post_if_needed(CHAIN, CHAIN_CFG["feed"], db, int(time.time() * 1000), min_age_s),
+                      lambda min_age_s, move_wad=None: relayer.post_if_needed(CHAIN, CHAIN_CFG["feed"], db,
+                                                                              int(time.time() * 1000), min_age_s, move_wad),
                       start_block=int(os.environ.get("ENGINE_START_BLOCK", "0")),
                       grace_s=int(os.environ.get("KEEPER_GRACE_S", "0")),
-                      post_every_s=int(os.environ.get("KEEPER_POST_S", "120")),
+                      heartbeat_s=int(os.environ.get("KEEPER_HEARTBEAT_S", keeper.POST_HEARTBEAT_S)),
                       sample_every_s=int(os.environ.get("KEEPER_SAMPLE_S", "300")))
     k.run()
 

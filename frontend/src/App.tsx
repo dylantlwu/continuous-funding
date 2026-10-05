@@ -6,7 +6,7 @@ import { CadenceChart } from "./components/CadenceChart";
 import { PositionCard } from "./components/PositionCard";
 import { RateCard } from "./components/RateCard";
 import { Ticket } from "./components/Ticket";
-import type { RatePoint } from "./funding";
+import { cStatus, type RatePoint } from "./funding";
 
 const FAUCET = "https://faucet.monad.xyz"; // docs.monad.xyz/developer-essentials/testnets
 const REPO = "https://github.com/dylantlwu/continuous-funding";
@@ -82,6 +82,8 @@ export function App() {
   const price = print ? pythPrice(print) : null;
   const conf = print ? pythConf(print) : null;
   const short = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
+  const cBadge = market && cStatus(Number(market.lastPostTime), Math.floor(now / 1000), Number(market.rate[0]),
+                                   consensus?.median_per_second_wad ?? null);
 
   return (
     <div className="page">
@@ -91,7 +93,7 @@ export function App() {
           <span className="tag">BTC-PERP · Monad testnet</span>
         </div>
         <div className="live">
-          <span><span className={`dot ${market?.stale ? "stale" : ""}`} />{market ? (market.stale ? "c waits for the next open" : "c fresh") : "connecting…"}</span>
+          <span><span className={`dot ${cBadge?.due ? "stale" : ""}`} />{cBadge ? cBadge.text : "connecting…"}</span>
           <span>BTC {price ? `$${price.toLocaleString("en-US", { maximumFractionDigits: 2 })}` : "—"}</span>
           <span>block {market ? market.block.toLocaleString("en-US") : "—"}</span>
         </div>
@@ -157,7 +159,7 @@ export function App() {
           <h4>Read before you trade</h4>
           <ul>
             <li>Testnet only. Test USDC has no value. Not audited.</li>
-            <li>c is posted on-chain every 2 minutes while positions are open, and before an open; between posts it stays at its last value and open positions accrue at it. A post never re-prices the past.</li>
+            <li>c is posted on-chain before an open, and while positions are open whenever the live median moves 0.25% a year from it, or at least hourly; between posts it stays at its last value and open positions accrue at it. A post never re-prices the past.</li>
             <li>One relayer key reports the five venue rates; the contract takes the median and limits c to ±100% a year, moving at most 5% a year per minute. Every reported value is public in the feed's events.</li>
             <li>Opens are refused when the vault could not survive a 25% move against the larger side. If the vault cannot pay a winning close, the close reverts rather than paying less.</li>
             <li>Need gas? <a href={FAUCET} target="_blank" rel="noreferrer">Monad testnet faucet</a>.</li>

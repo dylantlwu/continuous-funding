@@ -78,7 +78,7 @@ export function RateCard({ market, consensus, price, samples }: {
           })}
         </div>
         <dl className="kv">
-          <dt>median now (posted every 2 min while positions are open)</dt>
+          <dt>median now (posted when it moves 0.25% from c, or hourly)</dt>
           <dd>{consensus?.median_per_second_wad != null ? pct(aprPct(consensus.median_per_second_wad), 3) : "—"}</dd>
           <dt>vault cash</dt>
           <dd>{market ? usd(Number(market.vaultCash) / 1e6, 0) : "—"}</dd>

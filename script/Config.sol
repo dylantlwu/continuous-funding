@@ -38,7 +38,9 @@ library Config {
         p.tradeFeeRate = 0.0005e18; // 5 bp, provisional
         p.liquidationFeeRate = 0.005e18; // 0.5%, provisional
         p.maxOpenConfRate = 0.01e18;
-        p.maxPriceAge = 3;
+        p.maxPriceAge = 3; // latest-price paths (liquidate, poke): bots only
+        p.settleDelay = 2; // orders fill at the first Pyth price 2 s or more after commit
+        p.orderTtl = 60; // unsettled after 60 s: the order may be cancelled and its margin refunded
     }
 
     function newFeed(address relayer) internal returns (ConsensusFeed) {

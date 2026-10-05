@@ -17,7 +17,10 @@ import {Usdc, UsdWad, MarginStatic, MarginDynamic, Units, Margin, SafeCast, WadM
 /// Every touch accrues both with closed-form integrals on one clock (seconds), so how often the
 /// market is touched does not change what is owed. All funding settles against the vault.
 ///
-/// Cash ledger: USDC held = vaultCash + sum of position deposits. Nothing else.
+/// Trades are two-step: commit (no price), then anyone settles at the first oracle price after a fixed
+/// delay, which the oracle proves is the first. Liquidation and poke use the latest price (bots).
+///
+/// Cash ledger: USDC held = vaultCash + escrowCash + sum of position deposits. Nothing else.
 contract PerpEngine is ReentrancyGuard {
     using SafeERC20 for IERC20;
 
@@ -32,7 +35,17 @@ contract PerpEngine is ReentrancyGuard {
         uint256 tradeFeeRate; // of notional, open and close, to the vault, 1e18
         uint256 liquidationFeeRate; // of notional, to the liquidator, 1e18
         uint256 maxOpenConfRate; // opens revert if conf > price * this, 1e18
-        uint64 maxPriceAge; // seconds, for every call that uses a price
+        uint64 maxPriceAge; // seconds, for the latest-price paths (liquidate, poke)
+        uint64 settleDelay; // orders fill at the first oracle price this many seconds after commit
+        uint64 orderTtl; // an order not settled within this many seconds may be cancelled
+    }
+
+    /// A committed order, waiting for the first oracle price after `commitTime + settleDelay`.
+    struct Order {
+        int256 size; // open: signed size; close: 0
+        Usdc margin; // open: cash held in escrow until settlement
+        uint64 commitTime; // 0 = no order
+        bool isClose;
     }
 
     struct Position {
@@ -61,6 +74,8 @@ contract PerpEngine is ReentrancyGuard {
     uint256 public immutable liquidationFeeRate;
     uint256 public immutable maxOpenConfRate;
     uint64 public immutable maxPriceAge;
+    uint64 public immutable settleDelay;
+    uint64 public immutable orderTtl;
 
     // market state
     uint256 public longOI;
@@ -74,9 +89,14 @@ contract PerpEngine is ReentrancyGuard {
     int256 public entryNotional; // sum over positions of size x entryPrice (USD 1e18): unrealised PnL basis
 
     Usdc public vaultCash;
+    Usdc public escrowCash; // margins of open orders not yet settled
     bool public opensPaused;
     mapping(address => Position) public positions;
+    mapping(address => Order) public orders;
 
+    event OrderCommitted(address indexed account, int256 size, Usdc margin, bool isClose, uint64 settleAt);
+    event OrderRejected(address indexed account, bytes reason);
+    event OrderCancelled(address indexed account);
     event MarketUpdated(uint64 time, int256 premium, int256 fundingIndex, uint256 price, int256 consensusRate);
     event Opened(address indexed account, int256 size, uint256 price, Usdc deposit, Usdc fee);
     event Closed(
@@ -92,7 +112,6 @@ contract PerpEngine is ReentrancyGuard {
     event OpensPaused(bool paused);
 
     error NotOwner();
-    error ZeroSize();
     error OpensArePaused();
     error FeedStale();
     error PositionExists();
@@ -110,6 +129,13 @@ contract PerpEngine is ReentrancyGuard {
     error RefundFailed();
     error InsufficientOracleFee(uint256 sent, uint256 fee);
     error ZeroPrice();
+    error OrderPending();
+    error NoOrder();
+    error OrderExpired(uint64 deadline);
+    error OrderNotExpired(uint64 deadline);
+    error OnlySelf();
+    error PriceOutsideWindow(uint64 publishTime, uint64 minTime, uint64 maxTime);
+    error SettlementOutOfGas();
 
     constructor(IERC20 usdc_, ConsensusFeed feed_, uint8 feedMarket_, IPriceSource priceSource_, Params memory p) {
         usdc = usdc_;
@@ -128,29 +154,96 @@ contract PerpEngine is ReentrancyGuard {
         liquidationFeeRate = p.liquidationFeeRate;
         maxOpenConfRate = p.maxOpenConfRate;
         maxPriceAge = p.maxPriceAge;
+        settleDelay = p.settleDelay;
+        orderTtl = p.orderTtl;
         lastTime = uint64(block.timestamp);
         cCumAtLast = feed_.cumulative(feedMarket_);
     }
 
     // ───────────────────────────── trading ─────────────────────────────
 
-    /// Open a new isolated position. `margin` includes the open fee, which is taken first.
-    function open(int256 size, Usdc margin, bytes[] calldata priceUpdate) external payable nonReentrant {
-        if (size == 0) revert ZeroSize();
+    /// Step 1 of an open: commit size and margin (the margin includes the open fee), with no price.
+    /// The order fills at the first oracle price published `settleDelay` seconds or more after this block,
+    /// so the trader cannot know the fill price when signing and nobody can choose it afterwards.
+    function commitOpen(int256 size, Usdc margin) external nonReentrant {
+        if (_abs(size) < minSize) revert BelowMinSize(_abs(size), minSize);
         if (opensPaused) revert OpensArePaused();
         if (feed.isStale(feedMarket)) revert FeedStale();
-        Position storage pos = positions[msg.sender];
-        if (pos.size != 0) revert PositionExists();
+        if (positions[msg.sender].size != 0) revert PositionExists();
+        if (orders[msg.sender].commitTime != 0) revert OrderPending();
+        orders[msg.sender] = Order(size, margin, uint64(block.timestamp), false);
+        escrowCash = escrowCash + margin;
+        usdc.safeTransferFrom(msg.sender, address(this), Usdc.unwrap(margin));
+        emit OrderCommitted(msg.sender, size, margin, false, uint64(block.timestamp) + settleDelay);
+    }
 
-        if (_abs(size) < minSize) revert BelowMinSize(_abs(size), minSize);
-        (uint256 price, uint256 conf, uint256 oracleFee) = _readPrice(priceUpdate);
+    /// Step 1 of a close. Never blocked by the feed, the pause or the vault capacity: it reduces risk.
+    function commitClose() external nonReentrant {
+        if (positions[msg.sender].size == 0) revert NoPosition();
+        if (orders[msg.sender].commitTime != 0) revert OrderPending();
+        orders[msg.sender] = Order(0, Usdc.wrap(0), uint64(block.timestamp), true);
+        emit OrderCommitted(msg.sender, 0, Usdc.wrap(0), true, uint64(block.timestamp) + settleDelay);
+    }
+
+    /// Step 2, permissionless: fill `account`'s order at the first oracle price published at or after
+    /// `commitTime + settleDelay`, which the oracle proves is the first. The settler supplies the signed
+    /// update but has no choice of price. An open that fails its checks at that price (margin, vault
+    /// capacity, confidence, a pause) is rejected and its margin refunded, so no order can block the queue.
+    function settle(address account, bytes[] calldata priceUpdate) external payable nonReentrant {
+        Order memory o = orders[account];
+        if (o.commitTime == 0) revert NoOrder();
+        uint64 at = o.commitTime + settleDelay;
+        if (block.timestamp > at + orderTtl) revert OrderExpired(at + orderTtl);
+        (uint256 price, uint256 conf, uint64 publishTime, uint256 oracleFee) =
+            _pinnedPrice(priceUpdate, at, at + orderTtl);
+        delete orders[account];
+        _touch(price, publishTime);
+
+        if (o.isClose) {
+            _close(account, price, conf);
+        } else {
+            escrowCash = escrowCash - o.margin;
+            try this.executeOpen(account, o.size, o.margin, price, conf) {}
+            catch (bytes memory reason) {
+                // An empty reason is how running out of gas looks. Rejecting then would let a trader who
+                // settles their own order refuse an unfavourable fill by sending too little gas. Today the
+                // 63/64 rule already leaves too little gas to refund after an inner out-of-gas; this keeps
+                // it impossible if costs change.
+                if (reason.length == 0) revert SettlementOutOfGas();
+                usdc.safeTransfer(account, Usdc.unwrap(o.margin));
+                emit OrderRejected(account, reason);
+            }
+        }
+        _refund(oracleFee);
+    }
+
+    /// If nobody settled the order in time, anyone may cancel it; an open order's margin goes back.
+    function cancelExpired(address account) external nonReentrant {
+        Order memory o = orders[account];
+        if (o.commitTime == 0) revert NoOrder();
+        uint64 deadline = o.commitTime + settleDelay + orderTtl;
+        if (block.timestamp <= deadline) revert OrderNotExpired(deadline);
+        delete orders[account];
+        if (!o.isClose) {
+            escrowCash = escrowCash - o.margin;
+            usdc.safeTransfer(account, Usdc.unwrap(o.margin));
+        }
+        emit OrderCancelled(account);
+    }
+
+    /// Called only by `settle`, through an external self-call so that a failed check rolls back every
+    /// change it made and `settle` can reject the order instead of reverting.
+    function executeOpen(address account, int256 size, Usdc margin, uint256 price, uint256 conf) external {
+        if (msg.sender != address(this)) revert OnlySelf();
+        if (opensPaused) revert OpensArePaused();
+        if (feed.isStale(feedMarket)) revert FeedStale();
         if (conf * WAD > price * maxOpenConfRate) revert ConfidenceTooWide(price, conf);
-        _touch(price);
 
         uint256 exec = _execPrice(price, conf, size > 0);
         (MarginStatic deposit, Usdc fee) = _depositAfterFee(_abs(size), exec, margin);
         if (size > 0) longOI += uint256(size);
         else shortOI += uint256(-size);
+        Position storage pos = positions[account];
         pos.size = size;
         pos.deposit = deposit;
         pos.entryIndex = fundingIndex;
@@ -158,33 +251,7 @@ contract PerpEngine is ReentrancyGuard {
         entryNotional += _entryTerm(size, exec);
         vaultCash = vaultCash + fee;
         _requireVaultCapacity(price);
-
-        usdc.safeTransferFrom(msg.sender, address(this), Usdc.unwrap(margin));
-        emit Opened(msg.sender, size, exec, Units.cash(deposit), fee);
-        _refund(oracleFee);
-    }
-
-    /// Close the whole position. Never blocked by the feed, the pause or the caps: it reduces risk.
-    function close(bytes[] calldata priceUpdate) external payable nonReentrant {
-        Position memory pos = positions[msg.sender];
-        if (pos.size == 0) revert NoPosition();
-        (uint256 price, uint256 conf, uint256 oracleFee) = _readPrice(priceUpdate);
-        _touch(price);
-
-        uint256 exec = _execPrice(price, conf, pos.size < 0);
-        (UsdWad pnl, UsdWad funding) = _pnlAndFunding(pos, exec);
-        int256 notional = _notionalUp(_abs(pos.size), exec);
-        UsdWad feeWad = UsdWad.wrap(WadMath.mulDivCeil(notional, SafeCast.toInt(tradeFeeRate), WAD));
-        UsdWad equity = Units.staticWad(pos.deposit) + pnl - funding - feeWad;
-        Usdc payout = UsdWad.unwrap(equity) > 0 ? Units.toUsdcDown(equity) : Usdc.wrap(0);
-
-        _removePosition(msg.sender, pos);
-        _settleWithVault(pos.deposit, payout);
-        if (UsdWad.unwrap(equity) < 0) emit Shortfall(msg.sender, UsdWad.wrap(-UsdWad.unwrap(equity)));
-
-        if (Usdc.unwrap(payout) > 0) usdc.safeTransfer(msg.sender, Usdc.unwrap(payout));
-        emit Closed(msg.sender, pos.size, exec, pnl, funding, Units.toUsdcUp(feeWad), payout);
-        _refund(oracleFee);
+        emit Opened(account, size, exec, Units.cash(deposit), fee);
     }
 
     function addMargin(Usdc amount) external nonReentrant {
@@ -201,9 +268,10 @@ contract PerpEngine is ReentrancyGuard {
     function liquidate(address account, bytes[] calldata priceUpdate) external payable nonReentrant {
         Position memory pos = positions[account];
         if (pos.size == 0) revert NoPosition();
-        (uint256 price, uint256 conf, uint256 oracleFee) = _readPrice(priceUpdate);
+        (uint256 price, uint256 conf, uint64 publishTime, uint256 oracleFee) = _latestPrice(priceUpdate);
         if (pos.size < 0 && conf >= price) revert ConfidenceTooWide(price, conf);
-        _touch(price);
+        _touch(price, publishTime);
+        if (orders[account].isClose) delete orders[account]; // the position it would close is gone
 
         uint256 checkPrice = pos.size > 0 ? price + conf : price - conf;
         (bool liquidatable, UsdWad equity, MarginDynamic maintenance) = _liquidationCheck(pos, checkPrice);
@@ -227,9 +295,26 @@ contract PerpEngine is ReentrancyGuard {
 
     /// Anyone may bring the market up to date with a fresh price (keeps the accrual price recent).
     function poke(bytes[] calldata priceUpdate) external payable nonReentrant {
-        (uint256 price,, uint256 oracleFee) = _readPrice(priceUpdate);
-        _touch(price);
+        (uint256 price,, uint64 publishTime, uint256 oracleFee) = _latestPrice(priceUpdate);
+        _touch(price, publishTime);
         _refund(oracleFee);
+    }
+
+    function _close(address account, uint256 price, uint256 conf) internal {
+        Position memory pos = positions[account];
+        uint256 exec = _execPrice(price, conf, pos.size < 0);
+        (UsdWad pnl, UsdWad funding) = _pnlAndFunding(pos, exec);
+        int256 notional = _notionalUp(_abs(pos.size), exec);
+        UsdWad feeWad = UsdWad.wrap(WadMath.mulDivCeil(notional, SafeCast.toInt(tradeFeeRate), WAD));
+        UsdWad equity = Units.staticWad(pos.deposit) + pnl - funding - feeWad;
+        Usdc payout = UsdWad.unwrap(equity) > 0 ? Units.toUsdcDown(equity) : Usdc.wrap(0);
+
+        _removePosition(account, pos);
+        _settleWithVault(pos.deposit, payout);
+        if (UsdWad.unwrap(equity) < 0) emit Shortfall(account, UsdWad.wrap(-UsdWad.unwrap(equity)));
+
+        if (Usdc.unwrap(payout) > 0) usdc.safeTransfer(account, Usdc.unwrap(payout));
+        emit Closed(account, pos.size, exec, pnl, funding, Units.toUsdcUp(feeWad), payout);
     }
 
     // ───────────────────────────── vault (owner) ─────────────────────────────
@@ -304,14 +389,19 @@ contract PerpEngine is ReentrancyGuard {
 
     /// Accrue funding up to now at the PREVIOUS price, then record the new price for the next interval.
     /// The caller picks the new price (within the age window), so it must not price time already passed.
-    function _touch(uint256 newPrice) internal {
+    /// A settlement price can be older than the latest one already used (orders settle in any order), so
+    /// it moves `lastPrice` only if it is at least as new.
+    function _touch(uint256 newPrice, uint64 publishTime) internal {
         (int256 index, int256 p, int256 cCum) = _project();
         fundingIndex = index;
         premium = p;
         cCumAtLast = cCum;
         lastTime = uint64(block.timestamp);
-        lastPrice = newPrice;
-        emit MarketUpdated(uint64(block.timestamp), p, index, newPrice, feed.rate(feedMarket));
+        if (publishTime >= lastPublishTime) {
+            lastPrice = newPrice;
+            lastPublishTime = publishTime;
+        }
+        emit MarketUpdated(uint64(block.timestamp), p, index, lastPrice, feed.rate(feedMarket));
     }
 
     function _project() internal view returns (int256 index, int256 p, int256 cCum) {
@@ -331,10 +421,12 @@ contract PerpEngine is ReentrancyGuard {
         return velocity * k / scale;
     }
 
-    function _readPrice(bytes[] calldata update) internal returns (uint256 price, uint256 conf, uint256 oracleFee) {
-        oracleFee = priceSource.updateFee(update);
-        if (msg.value < oracleFee) revert InsufficientOracleFee(msg.value, oracleFee);
-        uint64 publishTime;
+    /// Latest price, for bots (liquidate, poke): no older than the last price used, at most `maxPriceAge`.
+    function _latestPrice(bytes[] calldata update)
+        internal
+        returns (uint256 price, uint256 conf, uint64 publishTime, uint256 oracleFee)
+    {
+        oracleFee = _oracleFee(update);
         (price, conf, publishTime) = priceSource.update{value: oracleFee}(update);
         if (price == 0) revert ZeroPrice(); // the adapter checks too; never value a position at zero
         if (publishTime < lastPublishTime) revert PriceOlderThanLast(publishTime, lastPublishTime);
@@ -342,7 +434,24 @@ contract PerpEngine is ReentrancyGuard {
         if (block.timestamp > publishTime && block.timestamp - publishTime > maxPriceAge) {
             revert PriceTooOld(publishTime, maxPriceAge);
         }
-        lastPublishTime = publishTime;
+    }
+
+    /// The first price at or after `minTime`, proven first by the oracle (order settlement).
+    function _pinnedPrice(bytes[] calldata update, uint64 minTime, uint64 maxTime)
+        internal
+        returns (uint256 price, uint256 conf, uint64 publishTime, uint256 oracleFee)
+    {
+        oracleFee = _oracleFee(update);
+        (price, conf, publishTime) = priceSource.firstPriceAfter{value: oracleFee}(update, minTime, maxTime);
+        if (price == 0) revert ZeroPrice();
+        if (publishTime < minTime || publishTime > maxTime) {
+            revert PriceOutsideWindow(publishTime, minTime, maxTime); // the oracle checks too
+        }
+    }
+
+    function _oracleFee(bytes[] calldata update) internal view returns (uint256 fee) {
+        fee = priceSource.updateFee(update);
+        if (msg.value < fee) revert InsufficientOracleFee(msg.value, fee);
     }
 
     /// Opens only. After the open, the vault must stay solvent through an adverse move of `stressMove` with
@@ -357,8 +466,7 @@ contract PerpEngine is ReentrancyGuard {
     }
 
     /// Trades execute at the oracle price moved by its confidence AGAINST the trader: buying (open long,
-    /// close short) at price + conf, selling at price - conf. A spread that widens when the oracle is unsure,
-    /// which is when picking a stale print inside the age window would pay.
+    /// close short) at price + conf, selling at price - conf. A spread that widens when the oracle is unsure.
     function _execPrice(uint256 price, uint256 conf, bool buy) internal pure returns (uint256) {
         if (buy) return price + conf;
         if (conf >= price) revert ConfidenceTooWide(price, conf);

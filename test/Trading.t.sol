@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.28;
 
-import {Test} from "forge-std/Test.sol";
+import {Test, Vm} from "forge-std/Test.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {ConsensusFeed} from "../src/ConsensusFeed.sol";
 import {PerpEngine} from "../src/PerpEngine.sol";
@@ -10,7 +10,8 @@ import {Usdc, UsdWad, MarginStatic, MarginDynamic} from "../src/lib/Units.sol";
 import {MockPriceSource} from "./harness/MockPriceSource.sol";
 import {TestParams} from "./Params.sol";
 
-/// Trading flows: open, close, add margin, liquidate. T2, T5, T6, T8, T11 and an end-to-end settlement.
+/// Trading flows: commit and settle opens and closes, add margin, liquidate.
+/// T2, T5, T6, T8, T11, T12, T13 and an end-to-end settlement.
 contract TradingTest is Test {
     TestUSDC usdc;
     ConsensusFeed feed;
@@ -23,6 +24,7 @@ contract TradingTest is Test {
     int256 constant APR_1PCT = TestParams.APR_1PCT;
     uint256 constant P0 = 100_000e18;
     uint256 constant SEED = 1_000_000e6;
+    uint64 constant DELAY = 2; // Config: settleDelay
 
     function setUp() public {
         vm.warp(1_000_000 - 120); // opening post 2 minutes early: tests may post a full step at 1_000_000
@@ -54,14 +56,51 @@ contract TradingTest is Test {
         px.set(p, c, uint64(block.timestamp));
     }
 
-    function _open(address who, int256 size, uint256 margin) internal {
+    function _commitOpen(address who, int256 size, uint256 margin) internal {
         vm.prank(who);
-        eng.open(size, Usdc.wrap(margin), none);
+        eng.commitOpen(size, Usdc.wrap(margin));
+    }
+
+    function _commitClose(address who) internal {
+        vm.prank(who);
+        eng.commitClose();
+    }
+
+    /// Moves time to the order's fill time if needed, then a keeper settles it at the mock's price.
+    function _settle(address who) internal {
+        (,, uint64 t,) = eng.orders(who);
+        if (block.timestamp < t + DELAY) vm.warp(t + DELAY);
+        vm.prank(keeper);
+        eng.settle(who, none);
+    }
+
+    function _open(address who, int256 size, uint256 margin) internal {
+        _commitOpen(who, size, margin);
+        _settle(who);
     }
 
     function _close(address who) internal {
-        vm.prank(who);
-        eng.close(none);
+        _commitClose(who);
+        _settle(who);
+    }
+
+    /// Settles and asserts the open was rejected with `sel`, its margin refunded and no position created.
+    function _settleExpectRejected(address who, bytes4 sel) internal {
+        (, Usdc margin,,) = eng.orders(who);
+        uint256 b0 = _bal(who);
+        vm.recordLogs();
+        _settle(who);
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        bytes4 got;
+        for (uint256 i = 0; i < logs.length; i++) {
+            if (logs[i].topics[0] == PerpEngine.OrderRejected.selector) {
+                got = bytes4(abi.decode(logs[i].data, (bytes)));
+            }
+        }
+        assertEq(got, sel, "rejection reason");
+        assertEq(_bal(who) - b0, Usdc.unwrap(margin), "margin refunded");
+        assertEq(_size(who), 0, "no position");
+        assertEq(Usdc.unwrap(eng.escrowCash()), 0, "escrow released");
     }
 
     function _deposit(address who) internal view returns (uint256 d) {
@@ -87,8 +126,10 @@ contract TradingTest is Test {
     // pays exactly c from longs to shorts, fees go to the vault, and the vault's net funding is zero.
     function test_balancedBookPaysConsensusLongToShort() public {
         _post(5 * APR_1PCT); // one step: the feed moves at most 5% APR per post
-        _open(traders[0], 1e18, 10_100e6); // long 1 BTC, fee 50
-        _open(traders[1], -1e18, 10_100e6); // short 1 BTC: skew 0, so p stays 0
+        _commitOpen(traders[0], 1e18, 10_100e6); // long 1 BTC, fee 50
+        _commitOpen(traders[1], -1e18, 10_100e6); // short 1 BTC, same second
+        _settle(traders[0]);
+        _settle(traders[1]); // both fill in the same second: skew 0, so p stays 0
         uint256 vaultAfterOpen = _vault();
         assertEq(vaultAfterOpen, SEED + 100e6);
 
@@ -97,22 +138,25 @@ contract TradingTest is Test {
         _price(P0, 0);
         uint256 a0 = _bal(traders[0]);
         uint256 b0 = _bal(traders[1]);
-        _close(traders[0]);
-        _close(traders[1]);
+        _commitClose(traders[0]);
+        _commitClose(traders[1]);
+        _settle(traders[0]);
+        _settle(traders[1]);
 
-        // funding per BTC for one day at 5% APR on 100k: 100000 * 5 * APR_1PCT * 86400 / 1e18 USD
-        uint256 fundingWad = uint256(100_000 * 5 * APR_1PCT * 86_400);
-        uint256 funding6 = fundingWad / 1e12; // 13.698630 USD
-        assertEq(_bal(traders[0]) - a0, 10_050e6 - 50e6 - funding6 - 1, "long pays c (ceil against trader)");
-        assertEq(_bal(traders[1]) - b0, 10_050e6 - 50e6 + funding6, "short receives c (floor)");
-        assertEq(_vault(), vaultAfterOpen + 100e6 + 1, "vault: close fees, plus 1 micro-USDC of rounding dust");
+        // funding per BTC for one day plus the 2 s settlement delay at 5% APR on 100,000 USD
+        uint256 fundingWad = uint256(100_000 * 5 * APR_1PCT * (86_400 + 2));
+        uint256 up = (fundingWad + 1e12 - 1) / 1e12;
+        uint256 down = fundingWad / 1e12;
+        assertEq(_bal(traders[0]) - a0, 10_050e6 - 50e6 - up, "long pays c (rounded against the trader)");
+        assertEq(_bal(traders[1]) - b0, 10_050e6 - 50e6 + down, "short receives c (rounded down)");
+        assertEq(_vault(), vaultAfterOpen + 100e6 + (up - down), "vault: close fees plus rounding dust");
         assertEq(eng.longOI() + eng.shortOI(), 0);
     }
 
     // Without this, a liquidation could pay the liquidator from nowhere or hide bad debt.
     function test_liquidationPaysRewardAndRecordsShortfall() public {
         _open(traders[0], 1e18, 10_050e6); // 10x long, deposit 10,000
-        _price(85_000e18, 0); // same second: no funding, so the numbers are exact                 // -15%: equity -5,000
+        _price(85_000e18, 0); // -15% in the second it filled: no funding, so equity is exactly -5,000
         uint256 v0 = _vault();
         vm.expectEmit(true, false, false, true);
         emit PerpEngine.Shortfall(traders[0], UsdWad.wrap(5_425e18)); // 5,000 bad debt + 425 reward not covered
@@ -138,9 +182,9 @@ contract TradingTest is Test {
 
         px.set(P0, 0, uint64(block.timestamp - 4));
         vm.expectRevert(abi.encodeWithSelector(PerpEngine.PriceTooOld.selector, uint64(block.timestamp - 4), uint64(3)));
-        _close(traders[0]);
+        eng.poke(none);
 
-        px.set(P0, 0, uint64(block.timestamp - 6)); // older than the price used at open
+        px.set(P0, 0, uint64(block.timestamp - 6)); // older than the price the open filled at
         vm.expectRevert(
             abi.encodeWithSelector(
                 PerpEngine.PriceOlderThanLast.selector, uint64(block.timestamp - 6), uint64(block.timestamp - 5)
@@ -150,10 +194,20 @@ contract TradingTest is Test {
         eng.liquidate(traders[0], none);
 
         _price(P0, 0);
+        _commitClose(traders[0]);
+        (,, uint64 t,) = eng.orders(traders[0]);
+        px.setPinnedAt(t + DELAY - 1); // a print from before the fill time
+        vm.warp(t + DELAY);
+        vm.expectRevert(abi.encodeWithSelector(PerpEngine.PriceOutsideWindow.selector, t + 1, t + 2, t + 2 + 60));
+        eng.settle(traders[0], none);
+        px.setPinnedAt(0);
+
         vm.expectRevert(PerpEngine.NoPosition.selector);
-        _close(traders[1]);
+        _commitClose(traders[1]);
         vm.expectRevert(PerpEngine.NoPosition.selector);
         eng.liquidate(traders[1], none);
+        vm.expectRevert(PerpEngine.NoOrder.selector);
+        eng.settle(traders[1], none);
     }
 
     // Without this, a dead feed or an owner pause could trap traders in positions or block liquidations,
@@ -165,10 +219,10 @@ contract TradingTest is Test {
         _price(P0, 0);
         assertTrue(feed.isStale(0));
         vm.expectRevert(PerpEngine.FeedStale.selector);
-        _open(traders[2], 1e18, 10_050e6);
+        _commitOpen(traders[2], 1e18, 10_050e6);
         eng.setOpensPaused(true);
         vm.expectRevert(PerpEngine.OpensArePaused.selector);
-        _open(traders[2], 1e18, 10_050e6);
+        _commitOpen(traders[2], 1e18, 10_050e6);
 
         _close(traders[0]); // close still works
         _price(80_000e18, 0);
@@ -177,30 +231,25 @@ contract TradingTest is Test {
         assertEq(eng.longOI(), 0);
     }
 
-    // Without this, an open could be priced off a wide-confidence (uncertain) print.
-    function test_T6_wideConfidenceBlocksOpens() public {
-        _price(P0, P0 / 100 + 1); // conf just above 1% of price
-        vm.expectRevert(abi.encodeWithSelector(PerpEngine.ConfidenceTooWide.selector, P0, P0 / 100 + 1));
-        _open(traders[0], 1e18, 10_050e6);
+    // Without this, an open could be priced off a wide-confidence (uncertain) print, or a bad fill would
+    // revert and leave the order stuck: it is rejected at settlement and the margin goes back.
+    function test_T6_wideConfidenceRejectsOpenAtSettlement() public {
+        _commitOpen(traders[0], 1e18, 10_050e6);
+        _price(P0, P0 / 100 + 1); // conf just above 1% of price at the fill time
+        _settleExpectRejected(traders[0], PerpEngine.ConfidenceTooWide.selector);
     }
 
-    // ───────────── T11: the free oracle option is closed ─────────────
-
-    // Without this, a trader could open, wait, and close against whichever signed price pays best,
-    // including one older than the price already used. That is a free option written by the vault.
-    function test_T11_cannotCloseOnAnOlderPrice() public {
-        uint64 tOpen = uint64(block.timestamp);
-        _open(traders[0], 1e18, 10_050e6);
-        vm.warp(block.timestamp + 2);
-        _price(98_000e18, 0);
-        eng.poke(none); // someone uses the newer, lower price
-        px.set(P0, 0, tOpen); // trader tries to close on the older, better print
-        vm.expectRevert(abi.encodeWithSelector(PerpEngine.PriceOlderThanLast.selector, tOpen, tOpen + 2));
-        _close(traders[0]);
+    // Without this, a pause or a dead feed between commit and fill would still let the open through.
+    function test_T6_pauseBetweenCommitAndFillRejects() public {
+        _commitOpen(traders[0], 1e18, 10_050e6);
+        eng.setOpensPaused(true);
+        _settleExpectRejected(traders[0], PerpEngine.OpensArePaused.selector);
     }
 
-    // F6 regression. Without this, the age windows could drift: a liquidator could pick a wick several seconds
-    // old (an option the trader does not have), or a trade could use a stale print. One 3-second window for all.
+    // ───────────── T11 / T13: prices for bots, pinned prices for orders ─────────────
+
+    // F6 regression. Without this, the latest-price window could drift and a liquidator could pick a wick
+    // several seconds old. Liquidate and poke take a price at most 3 s old.
     function test_T11_ageWindows() public {
         _open(traders[0], 1e18, 10_050e6);
         vm.warp(block.timestamp + 20);
@@ -211,12 +260,66 @@ contract TradingTest is Test {
         eng.liquidate(traders[0], none); // 3 s is allowed
 
         vm.warp(block.timestamp + 5); // past the price just used, so only the age check can fire
-        _post(0);
         px.set(P0, 0, uint64(block.timestamp - 4));
         vm.expectRevert(abi.encodeWithSelector(PerpEngine.PriceTooOld.selector, uint64(block.timestamp - 4), uint64(3)));
-        _open(traders[1], 1e18, 10_050e6);
+        eng.poke(none);
         px.set(P0, 0, uint64(block.timestamp - 3));
-        _open(traders[1], 1e18, 10_050e6);
+        eng.poke(none);
+    }
+
+    // T13. Without this, an order nobody settles would lock the trader's margin forever, or an order could be
+    // filled long after the fact. After the window it can only be cancelled, and the margin comes back.
+    function test_T13_expiredOrderCanOnlyBeCancelled() public {
+        uint256 b0 = _bal(traders[0]);
+        _commitOpen(traders[0], 1e18, 10_050e6);
+        (,, uint64 t,) = eng.orders(traders[0]);
+        vm.expectRevert(abi.encodeWithSelector(PerpEngine.OrderNotExpired.selector, t + DELAY + 60));
+        eng.cancelExpired(traders[0]);
+        vm.warp(t + DELAY + 61);
+        vm.expectRevert(abi.encodeWithSelector(PerpEngine.OrderExpired.selector, t + DELAY + 60));
+        eng.settle(traders[0], none);
+        eng.cancelExpired(traders[0]);
+        assertEq(_bal(traders[0]), b0, "margin back");
+        assertEq(Usdc.unwrap(eng.escrowCash()), 0);
+    }
+
+    // T13. Without this, two orders from one account could race, or a stale close order could act on a
+    // position that was liquidated in the meantime.
+    function test_T13_oneOrderAtATimeAndLiquidationClearsAPendingClose() public {
+        _commitOpen(traders[0], 1e18, 10_050e6);
+        vm.expectRevert(PerpEngine.OrderPending.selector);
+        _commitOpen(traders[0], 1e18, 10_050e6);
+        _settle(traders[0]);
+
+        _commitClose(traders[0]);
+        _price(80_000e18, 0);
+        eng.liquidate(traders[0], none);
+        (,, uint64 t,) = eng.orders(traders[0]);
+        assertEq(t, 0, "the pending close went with the position");
+        vm.expectRevert(PerpEngine.NoOrder.selector);
+        eng.settle(traders[0], none);
+    }
+
+    // T13. Without this, a trader settling their own order could refuse an unfavourable fill by giving the
+    // call too little gas, so the open fails inside and is "rejected" with a refund: the free option again.
+    // No gas limit may turn a valid order into a rejection; the call either fills it or reverts whole.
+    function test_T13_noGasLimitTurnsAFillIntoARejection() public {
+        _commitOpen(traders[0], 1e18, 10_050e6);
+        (,, uint64 t,) = eng.orders(traders[0]);
+        vm.warp(t + DELAY);
+        uint256 snap = vm.snapshotState();
+        uint256 fills;
+        for (uint256 g = 100_000; g <= 700_000; g += 5_000) {
+            try eng.settle{gas: g}(traders[0], none) {
+                assertEq(_size(traders[0]), 1e18, "a settle that returns has filled the order");
+                fills++;
+            } catch {
+                (,, uint64 still,) = eng.orders(traders[0]);
+                assertEq(still, t, "a settle that fails leaves the order pending");
+            }
+            vm.revertToState(snap);
+        }
+        assertGt(fills, 0, "some gas limit is enough");
     }
 
     // F4. Without this, trades would execute at the oracle mid, and a trader who opens on a print up to 3 s old
@@ -224,10 +327,12 @@ contract TradingTest is Test {
     // confidence interval against the trader, a spread that widens exactly when the oracle is unsure.
     function test_F4_tradesExecuteAtConfidenceAgainstTheTrader() public {
         _price(P0, 30e18);
-        _open(traders[0], 1e18, 10_100e6);
+        _commitOpen(traders[0], 1e18, 10_100e6);
+        _commitOpen(traders[1], -1e18, 10_100e6);
+        _settle(traders[0]);
+        _settle(traders[1]); // same second, skew 0: no funding moves
         (,,, uint256 longEntry) = eng.positions(traders[0]);
         assertEq(longEntry, P0 + 30e18, "long buys at price + conf");
-        _open(traders[1], -1e18, 10_100e6);
         (,,, uint256 shortEntry) = eng.positions(traders[1]);
         assertEq(shortEntry, P0 - 30e18, "short sells at price - conf");
 
@@ -241,7 +346,7 @@ contract TradingTest is Test {
     // vault withdrawals forever.
     function test_F5_belowMinSizeReverts() public {
         vm.expectRevert(abi.encodeWithSelector(PerpEngine.BelowMinSize.selector, 1, 0.001e18));
-        _open(traders[0], 1, 1e6);
+        _commitOpen(traders[0], 1, 1e6);
     }
 
     // F1 + F3 regression. Without this, open interest could be stacked on one side by opening hedge legs and
@@ -250,12 +355,12 @@ contract TradingTest is Test {
     function test_F1F3_vaultCapacityBoundsEachSide() public {
         // 1,000,000 vault / (100,000 x 25%) = 40 BTC per side
         _open(traders[0], 40e18, 402_000e6);
-        vm.expectPartialRevert(PerpEngine.VaultCapacityExceeded.selector);
-        _open(traders[1], 1e18, 10_100e6); // one more long: over capacity
+        _commitOpen(traders[1], 1e18, 10_100e6); // one more long: over capacity
+        _settleExpectRejected(traders[1], PerpEngine.VaultCapacityExceeded.selector);
         _open(traders[1], -40e18, 402_000e6); // the other side may grow to the same size
         _close(traders[1]); // the hedge leaves: skew is now +40, still covered
-        vm.expectPartialRevert(PerpEngine.VaultCapacityExceeded.selector);
-        _open(traders[2], 1e18, 10_100e6);
+        _commitOpen(traders[2], 1e18, 10_100e6);
+        _settleExpectRejected(traders[2], PerpEngine.VaultCapacityExceeded.selector);
     }
 
     // F3. Without this, unrealised profit already owed to traders would count as vault capacity: after a rally,
@@ -266,8 +371,8 @@ contract TradingTest is Test {
         _post(0);
         _price(120_000e18, 0); // longs are up 600,000
         // 30 BTC x 120,000 x 25% = 900,000 of stress > 1,000,000 + fees - 600,000 owed
-        vm.expectPartialRevert(PerpEngine.VaultCapacityExceeded.selector);
-        _open(traders[1], -1e18, 12_100e6);
+        _commitOpen(traders[1], -1e18, 12_100e6);
+        _settleExpectRejected(traders[1], PerpEngine.VaultCapacityExceeded.selector);
     }
 
     // ───────────── T5: a healthy position can never be liquidated ─────────────
@@ -362,8 +467,13 @@ contract TradingTest is Test {
         deal(address(usdc), traders[3], margin);
         vm.startPrank(traders[3]);
         usdc.approve(address(big), margin);
-        big.open(isLong ? int256(sizeWei) : -int256(sizeWei), Usdc.wrap(margin), none);
-        big.close(none);
+        big.commitOpen(isLong ? int256(sizeWei) : -int256(sizeWei), Usdc.wrap(margin));
+        vm.warp(block.timestamp + DELAY);
+        big.settle(traders[3], none);
+        assertEq(big.longOI() + big.shortOI(), sizeWei, "filled");
+        big.commitClose();
+        vm.warp(block.timestamp + DELAY);
+        big.settle(traders[3], none); // the trader settling their own orders gains nothing either
         vm.stopPrank();
         assertLe(_bal(traders[3]), margin, "trader never gains from rounding");
         assertEq(usdc.balanceOf(address(big)), Usdc.unwrap(big.vaultCash()), "everything left is vault cash");
@@ -374,7 +484,7 @@ contract TradingTest is Test {
 
     // Without this, a bookkeeping slip (OI not reduced on liquidation, entry index taken before accrual,
     // cash moved without a ledger entry) would leave the protocol quietly insolvent or mispricing p.
-    // Checks after every step: (1) USDC held == vaultCash + sum of deposits; (2) longOI/shortOI equal the
+    // Checks after every step: (1) USDC held == vaultCash + escrow + deposits; (2) longOI/shortOI equal the
     // positions; (3) funding attribution: the vault side, integrated by the test as -skew x dIndex at
     // every touch, equals minus the sum over positions of size x (exitIndex or now - entryIndex).
     int256 vaultSide36;
@@ -393,20 +503,25 @@ contract TradingTest is Test {
             _price(price, 0);
             address who = traders[(r >> 32) % 4];
             uint256 action = (r >> 40) % 5;
-            int256 skewBefore = eng.skew();
-            int256 iBefore = eng.fundingIndex();
             if (action <= 1 && _size(who) == 0) {
                 int256 size = int256(1e17 + (r >> 48) % 5e18) * ((r >> 120) % 2 == 0 ? int256(1) : int256(-1));
                 uint256 margin = uint256(size > 0 ? size : -size) * (price / 1e18) / 1e12 / (2 + (r >> 128) % 8) + 1e6;
-                vm.prank(who);
-                try eng.open(size, Usdc.wrap(margin), none) {
-                    _checkCapacity(price);
-                } catch {
-                    continue;
-                }
+                _commitOpen(who, size, margin);
+                _checkInvariants(); // the margin sits in escrow
+                vm.warp(block.timestamp + DELAY);
             } else if (action == 2 && _size(who) != 0) {
+                _commitClose(who);
+                vm.warp(block.timestamp + DELAY);
+            }
+            int256 skewBefore = eng.skew();
+            int256 iBefore = eng.fundingIndex();
+            (,, uint64 pending, bool isClose) = eng.orders(who);
+            if (pending != 0 && !isClose) {
+                _settle(who);
+                if (_size(who) != 0) _checkCapacity(price);
+            } else if (pending != 0) {
                 _recordExit(who, true);
-                _close(who);
+                _settle(who);
                 _finishExit();
             } else if (action == 3 && _size(who) != 0) {
                 _recordExit(who, false);
@@ -471,7 +586,13 @@ contract TradingTest is Test {
             basis += _floorMul(s, ep);
         }
         assertEq(eng.entryNotional(), basis, "unrealised-PnL basis equals the positions");
-        assertEq(usdc.balanceOf(address(eng)), _vault() + deposits, "cash ledger");
+        uint256 escrow;
+        for (uint256 i = 0; i < traders.length; i++) {
+            (, Usdc m,,) = eng.orders(traders[i]);
+            escrow += Usdc.unwrap(m);
+        }
+        assertEq(Usdc.unwrap(eng.escrowCash()), escrow, "escrow equals the open orders");
+        assertEq(usdc.balanceOf(address(eng)), _vault() + Usdc.unwrap(eng.escrowCash()) + deposits, "cash ledger");
         assertEq(eng.longOI(), longs, "longOI");
         assertEq(eng.shortOI(), shorts, "shortOI");
         assertEq(vaultSide36, -(closedSide36 + openSide36), "funding attribution");

@@ -14,7 +14,7 @@ contract PerpEngineHarness is PerpEngine {
     {}
 
     function h_touch(uint256 price) external {
-        _touch(price);
+        _touch(price, uint64(block.timestamp)); // a fresh print
     }
 
     function h_setOI(uint256 l, uint256 s) external {

@@ -58,8 +58,17 @@ and the data used to choose its parameters.
 No proxies, no governance, no token. The `owner` can pause new opens and rotate the relayer.
 
 Off-chain, two services, both replaceable by anyone: the **relayer** posts venue rates to
-`ConsensusFeed`; the **keeper** settles orders, liquidates and pokes. The keeper holds the Pyth API key,
-so the browser never does (Pyth's terms require keeping the key out of front-ends).
+`ConsensusFeed`; the **keeper** settles orders nobody else settled and liquidates. Both run from one
+backend that holds the Pyth API key, so the browser never does (Pyth requires keeping the key out of
+front-ends); the browser gets signed Pyth updates through that backend.
+
+**On-chain only when necessary (owner, 2026-10-05).** Everything shown continuously is computed
+off-chain from free reads: the five venue rates and their median (the recorder, every minute), the BTC
+price (Pyth through the backend), and `p`, the funding index, PnL and liquidation prices (contract
+views via `eth_call`). Transactions are sent only for: the relayer's post before an open (§5.4); order
+settlement, which **the trader sends from their own wallet** about 2 seconds after committing, with the
+keeper settling any order still pending after 10 seconds; and liquidations that a free `eth_call`
+simulation shows will succeed. Nothing is poked on a timer.
 
 ## 4. Units, precision and types
 

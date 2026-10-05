@@ -30,7 +30,7 @@ This project anchors to the market and adds a bounded, memoryful premium:
 
 | Term | What it is | How it moves |
 |---|---|---|
-| `c` | Median of Binance, OKX, Bybit, Hyperliquid and Bitget predicted funding, normalised to per second. The median is computed on chain from the five reported values. | Limited to ±100% a year and to 5% a year per minute of change. |
+| `c` | Median of Binance, OKX, Bybit, Hyperliquid and Bitget predicted funding, normalised to per second. The median is computed on chain from the five reported values. | Limited to ±100% a year and to 5% a year per minute of change, measured over time: one post after a quiet spell catches up as far as the elapsed time allows. Posted every 2 minutes while positions are open, and before an open. |
 | `p` | This market's own imbalance premium. | `dp/dt = 2% a year per hour × clamp(skew / 40 BTC, ±1)`, bounded to ±5% a year. It keeps moving while the imbalance lasts. |
 
 While one side dominates, `p` makes that side pay more and the other side earn more. That pays hedgers to
@@ -48,7 +48,9 @@ two-step fills do that.
   at or after commit + 2 s.
 - **Letting touch frequency change what is owed.** One clock in seconds, with closed-form integrals.
 - **Overselling the vault.** Every open must leave the vault solvent after a 25% move against the larger side,
-  net of profit it already owes.
+  net of profit it already owes; at most 10 BTC per account.
+- **A free option on the fill.** Committing just enough margin and being refunded whenever the print moves
+  against you: a margin-shortfall rejection keeps the open fee.
 
 ## Try it
 
@@ -56,8 +58,9 @@ two-step fills do that.
    adds or switches to Monad Testnet (chain 10143).
 2. Get a little testnet MON for gas at https://faucet.monad.xyz.
 3. Click **Get 10,000 test USDC**. Test USDC is free and worthless.
-4. Choose long or short, a size (from 0.001 BTC) and leverage, then commit. If the on-chain `c` is older than
-   three minutes, the backend posts it first. About 2 seconds later the order fills at the first Pyth print.
+4. Choose long or short, a size (0.001 to 10 BTC) and leverage, then confirm once in your wallet. If the
+   on-chain `c` is older than three minutes, the backend posts it first. The keeper fills the order at the first
+   Pyth print 2 seconds after your commit; there is no second confirmation.
 5. Watch the funding owed on your position change every block, then close it the same way.
 
 **Contracts on Monad testnet** (sources verified on [MonadVision](https://testnet.monadvision.com) via Sourcify,
@@ -65,18 +68,19 @@ exact match):
 
 | Contract | Address |
 |---|---|
-| PerpEngine | [`0x84Ff1945ba3caDD75fc2E95528E81d86E23221B0`](https://testnet.monadvision.com/address/0x84Ff1945ba3caDD75fc2E95528E81d86E23221B0) |
-| ConsensusFeed | [`0x6b96AD4E49B4F656d846531780cA1F27897d82bc`](https://testnet.monadvision.com/address/0x6b96AD4E49B4F656d846531780cA1F27897d82bc) |
+| PerpEngine | [`0xB228Cd8d7E5ad03B429D9ac3476c0C0a80909A59`](https://testnet.monadvision.com/address/0xB228Cd8d7E5ad03B429D9ac3476c0C0a80909A59) |
+| ConsensusFeed | [`0xed619331FF14A7b0Ca9116Dd86F4F40917D78D92`](https://testnet.monadvision.com/address/0xed619331FF14A7b0Ca9116Dd86F4F40917D78D92) |
 | PythPriceSource | [`0x27fD7bEb9836c7FCe9C4E7CFF8CbF33e887A8236`](https://testnet.monadvision.com/address/0x27fD7bEb9836c7FCe9C4E7CFF8CbF33e887A8236) |
 | TestUSDC | [`0x65DaBeFE62B7B43e861920699A6B158496946e09`](https://testnet.monadvision.com/address/0x65DaBeFE62B7B43e861920699A6B158496946e09) |
 
-Deployment record: [deployments/monad-testnet.json](deployments/monad-testnet.json).
+Deployment record: [deployments/monad-testnet.json](deployments/monad-testnet.json). The first version (v1, before
+the fourth review's fixes) stays on chain: [deployments/monad-testnet-v1.json](deployments/monad-testnet-v1.json).
 
 ## Why Monad
 
 - **Two-step fills that feel instant.** Trades are two-step, which is standard (Synthetix v3 does it): commit,
-  then fill at a later oracle price nobody chose. On Monad a commit is included in about a second and the fill
-  follows a couple of seconds after that. With 2-second blocks the same flow takes several blocks; with
+  then fill at a later oracle price nobody chose. On Monad a commit is included in about a second and the keeper
+  fills it a few seconds later, with one wallet confirmation. With 2-second blocks the same flow takes several blocks; with
   12-second blocks it is unusable for active trading.
 - **Liquidations on a 3-second price.** Liquidations and pokes must use a Pyth price at most 3 seconds old, and
   never older than the last price used. Measured from the keeper's host: Hermes 0.19 s, 0.21 s per RPC call,
@@ -177,7 +181,11 @@ forge clean && forge script script/Deploy.s.sol --rpc-url $MONAD_TESTNET_RPC --b
   relayer reports the five venue values: the contract takes their median and bounds the result, and every
   value is public in the feed's events. So the relayer is accountable, not trustless: it can misreport within
   the bounds, but not hide that it did. The owner can pause new opens and rotate the relayer, and nothing more.
-- **Freshness of `c`.** Between posts, `c` stays at its last value, and a post never re-prices the past.
+- **Freshness of `c`.** Between posts (every 2 minutes while positions are open), `c` stays at its last value,
+  and a post never re-prices the past. With no positions the relayer does not post.
+- **Capacity can be occupied.** A hedged pair of accounts fills capacity without funding cost; the 10 BTC
+  per-account cap makes that take many funded addresses, and a borrow fee (not implemented) would make it
+  cost money over time.
 - **`p` has memory.** When the book rebalances, `p` stays where it is until the opposite imbalance moves it,
   as in SIP-279.
 - **Vault solvency.** If the vault cannot pay a winning close, the close reverts rather than paying less. The

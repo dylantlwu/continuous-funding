@@ -25,7 +25,7 @@ function PHistory({ samples }: { samples: MarketSample[] }) {
         <line x1={pad} x2={w - pad} y1={y(-W_APR)} y2={y(-W_APR)} stroke="var(--rule)" strokeDasharray="2 3" />
         <path d={d} fill="none" stroke="var(--signal)" strokeWidth={1.8} />
       </svg>
-      <div className="band-l"><span>p over {span} (on chain, sampled every 5 min)</span><span>now {pct(last, 3)}</span></div>
+      <div className="band-l"><span>p over {span} (on chain, sampled every 5 min)</span><span>last sample {pct(last, 3)}</span></div>
     </div>
   );
 }
@@ -78,7 +78,7 @@ export function RateCard({ market, consensus, price, samples }: {
           })}
         </div>
         <dl className="kv">
-          <dt>median now (posted before the next open)</dt>
+          <dt>median now (posted every 2 min while positions are open)</dt>
           <dd>{consensus?.median_per_second_wad != null ? pct(aprPct(consensus.median_per_second_wad), 3) : "—"}</dd>
           <dt>vault cash</dt>
           <dd>{market ? usd(Number(market.vaultCash) / 1e6, 0) : "—"}</dd>

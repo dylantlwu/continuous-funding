@@ -157,7 +157,7 @@ export function App() {
           <h4>Read before you trade</h4>
           <ul>
             <li>Testnet only. Test USDC has no value. Not audited.</li>
-            <li>c is posted on-chain only before an open (it costs the relayer gas); between opens it stays at its last value and open positions accrue at it. A post never re-prices the past.</li>
+            <li>c is posted on-chain every 2 minutes while positions are open, and before an open; between posts it stays at its last value and open positions accrue at it. A post never re-prices the past.</li>
             <li>One relayer key reports the five venue rates; the contract takes the median and limits c to ±100% a year, moving at most 5% a year per minute. Every reported value is public in the feed's events.</li>
             <li>Opens are refused when the vault could not survive a 25% move against the larger side. If the vault cannot pay a winning close, the close reverts rather than paying less.</li>
             <li>Need gas? <a href={FAUCET} target="_blank" rel="noreferrer">Monad testnet faucet</a>.</li>

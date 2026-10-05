@@ -39,7 +39,9 @@ function PHistory({ samples }: { samples: MarketSample[] }) {
           <path d={d} fill="none" stroke="var(--signal)" strokeWidth={1.8} vectorEffect="non-scaling-stroke" />
         </svg>
       </div>
-      <div className="band-l"><span>p, last {span} · on chain, every 5 min · axis fitted</span><span>last {pct(last, dp)}</span></div>
+      <div className="band-l" title="p read on chain every 5 minutes by the keeper; the axis is fitted to these samples, with 0 always shown">
+        <span>p · {span} · fitted axis</span><span>last {pct(last, dp)}</span>
+      </div>
     </div>
   );
 }

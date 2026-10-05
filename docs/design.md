@@ -151,25 +151,28 @@ The relayer reads each venue's live predicted funding, normalises it to per seco
 values it reports, but it chooses those values: it is accountable, not trustless. Every reported value is
 public in the feed's events.
 
-When it posts (owner, 2026-10-05): before an open (the front-end asks when a trader clicks open, because a
-commit requires a fresh feed), and again before settling an open only if the feed went stale in between.
-Closes and liquidations never need a post. Between posts, `c` stays at its last value and open positions
-accrue at it; a post changes `c` from its own timestamp onward and never re-prices the past.
+When it posts (owner, 2026-10-05, revised after the fourth review): every 2 minutes while there is open
+interest or a pending order, and before an open when the feed is older than 3 minutes (a commit requires a
+fresh feed). With no positions it does not post: nothing accrues, and every post is charged at its gas limit.
+Between posts, `c` stays at its last value and open positions accrue at it; a post changes `c` from its own
+timestamp onward and never re-prices the past.
 
 `post(market, observedAt, venueRates[5])`:
 - reverts if `msg.sender != relayer`, if `observedAt` is not newer than the last post, is in the future,
   or is more than 2 minutes old, or if a post already landed in this second;
 - takes the median of the venues present (a venue can be marked missing; at least 3 are required;
   an even count averages the middle two, rounded toward zero);
-- **clamps** (does not revert) the median to ±`cMax`, and the change to at most `maxStep` per post AND
-  at most `maxSlewPerSec` × seconds since the last post; `c` starts at 0. Emits `Clamped`. Rejecting
+- **clamps** (does not revert) the median to ±`cMax`, and the change to at most `maxSlewPerSec` × seconds
+  since the previous post (since deployment for the first post; `c` starts at 0). The bound is on change over
+  time, not per post, so one post after a quiet spell catches up as far as the elapsed time allows (v1 also
+  capped each post at 5% APR, which let a rarely-posted `c` fall far behind the venues). Emits `Clamped`. Rejecting
   would make the feed go stale exactly in a squeeze, when venue rates can exceed any cap (Binance's BTC
   cap is 0.3% per 8h, about 330% APR);
 - updates the cumulative integral at the post's own `block.timestamp`, never at `observedAt`, so a post
   cannot rewrite time already accrued.
 
-Bounds (owner, 2026-10-03): `cMax` 100% APR, `maxStep` 5% APR per post, slew 5% APR per minute, so
-±100% takes at least 20 minutes from 0, publicly, whatever the relayer does. The trust gap is
+Bounds (owner, 2026-10-03; per-post step removed 2026-10-05): `cMax` 100% APR, slew 5% APR per minute,
+so ±100% takes at least 20 minutes from 0, publicly, whatever the relayer does. The trust gap is
 disclosed: one relayer key, and `c` (up to ±100% APR) is much larger than the on-chain `p` (±5%). The
 relayer can misreport venue values; it cannot hide that it did. Mitigations: on-chain median of logged
 inputs, the slew bound, and owner pause and key rotation, though today the owner and the relayer are the
@@ -208,8 +211,11 @@ RPC call 2–3 s, before anyone confirms in a wallet. So trades are two-step, as
    later print is refused.
 
 The 2-second delay means the trader cannot have seen the fill price when signing. An open that fails its
-checks at the fill price (margin, vault capacity, confidence, a pause, a stale feed) is **rejected and
-refunded** rather than reverted, so no order can block the queue. Running out of gas inside that check
+checks at the fill price is **rejected** rather than reverted, so no order can block the queue. A rejection
+the trader cannot cause (vault capacity, oracle confidence, a pause, a stale feed) refunds the margin in
+full. A margin shortfall keeps the open fee at the fill price and refunds the rest (2026-10-05): margin is
+the trader's choice, and refunding it in full would make "commit just enough" a free option on the 2
+seconds, filled when the print is favourable and refunded when it is not. Running out of gas inside that check
 reverts the whole settlement instead of rejecting, so a trader settling their own order cannot refuse an
 unfavourable fill by under-funding gas (the 63/64 rule already prevents it at today's costs; the check
 keeps it so). An order nobody settles within 60 s can be cancelled and its margin returned; the keeper
@@ -231,7 +237,7 @@ seconds after the click, at a price no one chose. With 2-second blocks the same 
 blocks, and with 12-second blocks it is unusable for active trading.
 
 Positions must be at least 0.001 BTC, so no dust position can sit unliquidatable and block the owner's
-withdrawal.
+withdrawal, and at most 10 BTC per account (§8).
 
 **Fail loud, without freezing risk reduction.**
 - A liquidation **reverts** if the price is zero, older than allowed, older than the last used price,
@@ -260,19 +266,26 @@ the `Shortfall`). Any remaining equity goes to the vault.
   becomes the other side. A per-trade skew cap does not work for the same reason (an independent audit
   showed it could be walked to 10× its value by opening hedge legs and closing them). With a 1,000,000
   vault at 100,000 per BTC this is 40 BTC per side. Funding owed is not counted (small, disclosed).
+- Why the larger side and not the net: a net (skew) rule checked at opens can be walked up without limit
+  by opening hedged pairs and then closing one leg of each, because closes are never checked. The
+  failure then is an insolvent vault. Counting the larger side bounds the worst case after any sequence
+  of closes; its failure mode is a frozen book, not lost money.
+- That failure mode is real: a hedged pair (one long account, one short account) occupies capacity at
+  no funding cost, so an attacker can block new opens for the price of two fees. Mitigation (owner,
+  2026-10-05): at most 10 BTC per account, so filling a side takes several funded addresses, each needing
+  testnet gas from a captcha faucet. A determined attacker can still do it; a borrow fee on open interest
+  (as on GMX) would make occupying capacity cost money over time, and is not implemented.
 - Trades that reduce the larger side are always allowed; the capacity rule, not funding, is the
-  defence against toxic flow. Known cost: a hedged participant can occupy capacity for about `w` APR and
-  crowd others out; disclosed, mitigated by keeping `w` small relative to the fee.
+  defence against toxic flow.
 
 ## 9. Gas on Monad
 
 Monad charges the gas **limit**. The frontend sends fixed per-function limits from
 `forge test --gas-report` plus a small margin. Every call touches one market; accrual is O(1).
 
-Measured on a fork of Monad testnet against the real Pyth contract with real Hermes updates
-(`script/rehearse-fork.sh`, EVM gas rules; the limits are fixed from testnet receipts after deployment):
-`commitOpen` 190,243 · `settle` (open) 414,476 · `commitClose` 71,786 · `settle` (close) 361,653 · feed
-`post` 86,021.
+Testnet receipts (v1, 2026-10-05; on Monad `gasUsed` equals the limit charged): feed `post` 75,406
+(estimate × 1.05) · `commitOpen` 246,554 · `settle` (open, with Pyth verification) 544,601 · `commitClose`
+96,709 · `settle` (close) 497,922 (estimate × 1.3).
 
 ## 10. Decisions
 
@@ -281,6 +294,10 @@ Pyth; the feed bounds and on-chain median (§5.4); the rounding rule (§4); the 
 (§8); `VaultInsolvent` kept and disclosed; execution at price ± conf; two-step orders filled at the
 first Pyth print 2 s after commit, cancellable after 60 s (§7); a 3-second window for the latest-price
 paths; minimum size 0.001 BTC; liquidation reward paid by the vault, remaining equity to the vault.
+After the fourth review (2026-10-05): the feed's bound is on change over time only (no per-post step);
+`c` is posted every 2 minutes while there is open interest; at most 10 BTC per account; a margin-shortfall
+rejection keeps the open fee; the keeper settles orders as soon as the print exists (one wallet
+confirmation per trade); the faucet stays open.
 
 Still provisional: fees (5 bp open/close, 0.5% liquidation); `skewScale` for the demo; scope cuts
 (owner-seeded vault without LP shares, BTC only, no partial close, no remove-margin, owner pause instead
@@ -299,11 +316,11 @@ arbitrage profit, `w` and cost sweeps, comparison with the velocity-only rule an
 | T6 | Zero, stale, older-than-last and missing data revert; global problems do not block closes or liquidations; dust below the minimum size cannot be opened. |
 | T7 | Fuzz: `|p| <= w`; `p` moves at most `V × dt`. |
 | T8 | Extreme sizes and prices: no overflow; rounding always against the trader. |
-| T9 | Feed: unauthorised, out-of-order, future, too-old or same-second posts revert; the applied rate is the on-chain median; out-of-range values are clamped; the bound holds over time (5% APR per minute), not just per post; the integral switches at the post's timestamp. |
+| T9 | Feed: unauthorised, out-of-order, future, too-old or same-second posts revert; the applied rate is the on-chain median, and the backend's median matches it on 300 vectors; out-of-range values are clamped; the bound holds over time (5% APR per minute) and one post after a quiet spell catches up; the first post is bounded by the time since deployment; the integral switches at the post's timestamp. |
 | T10 | Golden vectors: the Python reference and the contract produce the same funding for a recorded scenario. |
 | T11 | Latest-price paths (liquidate, poke): any price older than 3 s or older than the last used price reverts; trades execute at price ± conf against the trader. |
-| T12 | Vault capacity: open interest cannot be stacked on one side by opening and closing hedge legs; capacity is net of unrealised profit already owed. |
-| T13 | Two-step orders: only the first Pyth print at or after commit + 2 s fills (earlier and non-first prints are refused); a pinned fill does not rewind the latest price; expired orders can only be cancelled; one order per account; liquidation clears a pending close; no gas limit turns a fill into a rejection; failed opens are refunded. |
+| T12 | Vault capacity: open interest cannot be stacked on one side by opening and closing hedge legs; capacity is net of unrealised profit already owed; at most 10 BTC per account. |
+| T13 | Two-step orders: only the first Pyth print at or after commit + 2 s fills (earlier and non-first prints are refused); a pinned fill does not rewind the latest price; expired orders can only be cancelled; one order per account; liquidation clears a pending close; no gas limit turns a fill into a rejection; rejections the trader cannot cause refund in full, a margin shortfall keeps the open fee. |
 
 ## 12. Deliberately not doing
 

@@ -23,7 +23,9 @@ import {Config} from "./Config.sol";
 /// committed source (same code, different metadata hash), which Sourcify then only partially matched.
 /// Monad charges the gas limit and reprices cold state access, so limits come from the node's estimate.
 ///
-/// Env: PRIVATE_KEY (deployer, testnet only), RELAYER (default: the deployer), DEPLOY_OUT.
+/// Env: PRIVATE_KEY (deployer, testnet only), RELAYER (default: the deployer), DEPLOY_OUT,
+/// USDC and PRICE_SOURCE (optional: reuse an existing TestUSDC / PythPriceSource instead of deploying new ones,
+/// so traders keep their test USDC across engine versions).
 contract Deploy is Script {
     // Monad testnet Pyth contract: https://docs.monad.xyz/tooling-and-infra/oracles
     address internal constant PYTH_MONAD_TESTNET = 0x2880aB155794e7179c9eE2e38200202908C17B43;
@@ -39,9 +41,13 @@ contract Deploy is Script {
         string memory out = vm.envOr("DEPLOY_OUT", string("deployments/monad-testnet.json"));
 
         vm.startBroadcast(pk);
-        TestUSDC usdc = new TestUSDC();
+        address reuseUsdc = vm.envOr("USDC", address(0));
+        address reuseSource = vm.envOr("PRICE_SOURCE", address(0));
+        TestUSDC usdc = reuseUsdc != address(0) ? TestUSDC(reuseUsdc) : new TestUSDC();
         ConsensusFeed feed = Config.newFeed(relayer);
-        PythPriceSource source = new PythPriceSource(IPyth(PYTH_MONAD_TESTNET), BTC_USD);
+        PythPriceSource source = reuseSource != address(0)
+            ? PythPriceSource(reuseSource)
+            : new PythPriceSource(IPyth(PYTH_MONAD_TESTNET), BTC_USD);
         PerpEngine engine = new PerpEngine(IERC20(address(usdc)), feed, BTC_MARKET, source, Config.engineParams());
 
         uint256 cap = usdc.FAUCET_MAX();

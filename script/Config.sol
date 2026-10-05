@@ -19,8 +19,7 @@ library Config {
 
     // consensus feed
     int256 internal constant C_MAX = 100 * APR_1PCT;
-    int256 internal constant MAX_STEP = 5 * APR_1PCT; // per post
-    int256 internal constant SLEW = (5 * APR_1PCT + 59) / 60; // per second, rounded up: 5% APR per minute
+    int256 internal constant SLEW = (5 * APR_1PCT + 59) / 60; // per second, rounded up: 5% APR per minute, no per-post cap
     uint64 internal constant MAX_DELAY = 120; // a post's observation may be at most 2 minutes old
     uint64 internal constant STALE_AFTER = 300; // no post for 5 minutes: opens pause
 
@@ -33,6 +32,7 @@ library Config {
         p.skewScale = SKEW_SCALE;
         p.stressMove = 0.25e18;
         p.minSize = 0.001e18;
+        p.maxSize = 10e18; // per account (owner, 2026-10-05): one address cannot fill the vault's capacity
         p.initialMarginRate = 0.1e18; // 10x
         p.maintenanceMarginRate = 0.05e18;
         p.tradeFeeRate = 0.0005e18; // 5 bp, provisional
@@ -44,6 +44,6 @@ library Config {
     }
 
     function newFeed(address relayer) internal returns (ConsensusFeed) {
-        return new ConsensusFeed(relayer, C_MAX, MAX_STEP, SLEW, MAX_DELAY, STALE_AFTER);
+        return new ConsensusFeed(relayer, C_MAX, SLEW, MAX_DELAY, STALE_AFTER);
     }
 }

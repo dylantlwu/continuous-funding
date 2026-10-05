@@ -18,8 +18,9 @@ contract FundingCoreTest is Test {
     uint256 constant PRICE = 100_000e18;
 
     function setUp() public {
-        vm.warp(1_000_000);
+        vm.warp(1_000_000 - 3600); // the feed has been deployed an hour: first posts are not slew-bound
         feed = TestParams.newFeed(relayer);
+        vm.warp(1_000_000);
         eng = new PerpEngineHarness(feed, TestParams.defaults());
     }
 
@@ -31,7 +32,7 @@ contract FundingCoreTest is Test {
     // T1. Without this, a units or clock error (hours vs seconds, a missing 1e18) in the index would go
     // unnoticed: with c and p constant, funding per BTC over N seconds must be price x (c + p) x N exactly.
     function test_T1_constantRateAccruesExactly() public {
-        _post(5 * APR_1PCT); // one step from 0
+        _post(5 * APR_1PCT);
         eng.h_setPremium(3 * APR_1PCT); // skew 0, so p stays where it is
         eng.h_touch(PRICE);
         int256 i0 = eng.fundingIndex();

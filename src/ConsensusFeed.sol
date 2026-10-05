@@ -9,10 +9,12 @@ pragma solidity 0.8.28;
 /// The feed keeps the time integral of c so a market can accrue exactly across several posts
 /// without being touched in between: ∫c dt over [t0, t1] = cumulative(t1) - cumulative(t0).
 ///
-/// Trust bounds (what a compromised relayer can do): at most one post per second; each post moves c by at
-/// most `maxStep` AND by at most `maxSlewPerSec` × seconds since the last post; never beyond ±`cMax`; c
-/// starts at 0. Out-of-range values are CLAMPED, not rejected: rejecting would let the feed go stale
-/// exactly during a squeeze, when venue rates can exceed any cap.
+/// Trust bounds (what a compromised relayer can do): at most one post per second; c moves by at most
+/// `maxSlewPerSec` × seconds since the previous post (since deployment for the first post, from 0); never
+/// beyond ±`cMax`. The bound is on change over TIME, not per post: after a quiet spell one post can catch up
+/// as far as the elapsed time allows, so a rarely-posted c cannot be left far behind the venues. Out-of-range
+/// values are CLAMPED, not rejected: rejecting would let the feed go stale exactly during a squeeze, when venue
+/// rates can exceed any cap.
 contract ConsensusFeed {
     uint256 public constant VENUES = 5; // Binance, OKX, Bybit, Hyperliquid, Bitget
     int256 public constant MISSING = type(int256).min; // a venue the relayer could not read
@@ -31,7 +33,7 @@ contract ConsensusFeed {
     bool public postingPaused;
 
     int256 public immutable cMax;
-    int256 public immutable maxStep;
+    uint64 public immutable deployedAt; // the first post's slew is measured from here
     int256 public immutable maxSlewPerSec;
     uint64 public immutable maxDelay;
     uint64 public immutable staleAfter;
@@ -52,18 +54,11 @@ contract ConsensusFeed {
     error SameSecond();
     error TooFewVenues(uint256 present);
 
-    constructor(
-        address relayer_,
-        int256 cMax_,
-        int256 maxStep_,
-        int256 maxSlewPerSec_,
-        uint64 maxDelay_,
-        uint64 staleAfter_
-    ) {
+    constructor(address relayer_, int256 cMax_, int256 maxSlewPerSec_, uint64 maxDelay_, uint64 staleAfter_) {
         owner = msg.sender;
         relayer = relayer_;
         cMax = cMax_;
-        maxStep = maxStep_;
+        deployedAt = uint64(block.timestamp);
         maxSlewPerSec = maxSlewPerSec_;
         maxDelay = maxDelay_;
         staleAfter = staleAfter_;
@@ -80,11 +75,8 @@ contract ConsensusFeed {
 
         int256 median = medianOf(venueRates);
         int256 applied = _clamp(median, -cMax, cMax);
-        int256 step = maxStep; // the first post moves c from 0 by at most one step
-        if (f.initialized) {
-            int256 slew = maxSlewPerSec * int256(uint256(block.timestamp - f.lastPostTime));
-            if (slew < step) step = slew;
-        }
+        uint64 since = f.initialized ? f.lastPostTime : deployedAt; // c starts at 0 at deployment
+        int256 step = maxSlewPerSec * int256(uint256(block.timestamp - since));
         applied = _clamp(applied, f.rate - step, f.rate + step);
 
         // close the previous segment at THIS block's timestamp, so a post never rewrites accrued time

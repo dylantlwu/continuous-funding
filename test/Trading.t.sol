@@ -47,6 +47,18 @@ contract TradingTest is Test {
 
     // ───────────── helpers ─────────────
 
+    /// Replace the engine with one using `p` (same feed, price source, token), seeded like setUp.
+    function _useEngine(PerpEngine.Params memory p) internal {
+        eng = new PerpEngine(IERC20(address(usdc)), feed, 0, px, p);
+        deal(address(usdc), address(this), SEED);
+        usdc.approve(address(eng), type(uint256).max);
+        eng.seedVault(Usdc.wrap(SEED));
+        for (uint256 i = 0; i < traders.length; i++) {
+            vm.prank(traders[i]);
+            usdc.approve(address(eng), type(uint256).max);
+        }
+    }
+
     function _post(int256 r) internal {
         vm.prank(relayer);
         feed.post(0, uint64(block.timestamp), TestParams.venues(r));
@@ -84,7 +96,8 @@ contract TradingTest is Test {
         _settle(who);
     }
 
-    /// Settles and asserts the open was rejected with `sel`, its margin refunded and no position created.
+    /// Settles and asserts the open was rejected with `sel` for a reason the trader cannot cause: no position,
+    /// escrow released, margin refunded in full, no fee kept.
     function _settleExpectRejected(address who, bytes4 sel) internal {
         (, Usdc margin,,) = eng.orders(who);
         uint256 b0 = _bal(who);
@@ -92,12 +105,15 @@ contract TradingTest is Test {
         _settle(who);
         Vm.Log[] memory logs = vm.getRecordedLogs();
         bytes4 got;
+        uint256 kept = type(uint256).max;
         for (uint256 i = 0; i < logs.length; i++) {
             if (logs[i].topics[0] == PerpEngine.OrderRejected.selector) {
-                got = bytes4(abi.decode(logs[i].data, (bytes)));
+                (bytes memory reason, uint256 k) = abi.decode(logs[i].data, (bytes, uint256));
+                (got, kept) = (bytes4(reason), k);
             }
         }
         assertEq(got, sel, "rejection reason");
+        assertEq(kept, 0, "no fee kept for a rejection the trader cannot cause");
         assertEq(_bal(who) - b0, Usdc.unwrap(margin), "margin refunded");
         assertEq(_size(who), 0, "no position");
         assertEq(Usdc.unwrap(eng.escrowCash()), 0, "escrow released");
@@ -349,10 +365,46 @@ contract TradingTest is Test {
         _commitOpen(traders[0], 1, 1e6);
     }
 
+    // Review finding (2026-10-05). Without this, one address could take a whole side of the vault's capacity and,
+    // with a hedge on another, freeze every new open for the price of two fees.
+    function test_perAccountSizeCap() public {
+        vm.expectRevert(abi.encodeWithSelector(PerpEngine.AboveMaxSize.selector, 10.001e18, 10e18));
+        _commitOpen(traders[0], 10.001e18, 110_000e6);
+        _open(traders[0], -10e18, 110_000e6);
+        assertEq(_size(traders[0]), -10e18);
+    }
+
+    // Review finding (2026-10-05). Without this, committing just enough margin would be a free option on the 2 s
+    // to the fill: an adverse print gets the order rejected and fully refunded, a favourable one fills. A margin
+    // shortfall now keeps the open fee; a rejection the trader cannot cause (here, a pause) still refunds all.
+    function test_marginShortfallRejectionKeepsTheFee() public {
+        _commitOpen(traders[0], 1e18, 10_050e6); // exactly 10x margin + fee at 100,000
+        _price(101_000e18, 0); // the print moves 1% against the long
+        uint256 b0 = _bal(traders[0]);
+        uint256 v0 = _vault();
+        vm.recordLogs();
+        _settle(traders[0]);
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        uint256 kept;
+        for (uint256 i = 0; i < logs.length; i++) {
+            if (logs[i].topics[0] == PerpEngine.OrderRejected.selector) {
+                (, kept) = abi.decode(logs[i].data, (bytes, uint256));
+            }
+        }
+        assertEq(kept, 50.5e6, "the open fee at the fill price (5 bp of 101,000)");
+        assertEq(_bal(traders[0]) - b0, 10_050e6 - 50.5e6, "the rest is refunded");
+        assertEq(_vault() - v0, 50.5e6, "the vault keeps the fee");
+        assertEq(_size(traders[0]), 0);
+        assertEq(Usdc.unwrap(eng.escrowCash()), 0);
+    }
+
     // F1 + F3 regression. Without this, open interest could be stacked on one side by opening hedge legs and
     // closing them (closes are never capped), until a small move drains the vault and winners cannot close.
     // Each open must leave the vault solvent after a 25% move with the larger side unhedged.
     function test_F1F3_vaultCapacityBoundsEachSide() public {
+        PerpEngine.Params memory p = TestParams.defaults();
+        p.maxSize = 1_000e18; // this test is about the vault's capacity, not the per-account cap
+        _useEngine(p);
         // 1,000,000 vault / (100,000 x 25%) = 40 BTC per side
         _open(traders[0], 40e18, 402_000e6);
         _commitOpen(traders[1], 1e18, 10_100e6); // one more long: over capacity
@@ -366,6 +418,9 @@ contract TradingTest is Test {
     // F3. Without this, unrealised profit already owed to traders would count as vault capacity: after a rally,
     // the vault's cash is still there but much of it is spoken for.
     function test_F3_capacityIsNetOfProfitAlreadyOwed() public {
+        PerpEngine.Params memory p = TestParams.defaults();
+        p.maxSize = 1_000e18;
+        _useEngine(p);
         _open(traders[0], 30e18, 301_600e6);
         vm.warp(block.timestamp + 1);
         _post(0);
@@ -389,7 +444,7 @@ contract TradingTest is Test {
         uint256 elapsed,
         int256 cPct
     ) public {
-        sizeMilli = bound(sizeMilli, 1, 40_000); // 0.001 to 40 BTC (the vault's capacity per side)
+        sizeMilli = bound(sizeMilli, 1, 10_000); // 0.001 to 10 BTC (the per-account cap)
         lev = bound(lev, 1, 10);
         moveBp = bound(moveBp, -3000, 3000);
         confBp = bound(confBp, 0, 200);
@@ -455,7 +510,9 @@ contract TradingTest is Test {
     // Without this, rounding could let a zero-move round trip pull dust out of the vault, which a bot can
     // repeat without limit; and extreme sizes or prices could overflow.
     function testFuzz_T8_roundTripNeverExtractsFromVault(uint256 sizeWei, uint256 priceWei, bool isLong) public {
-        PerpEngine big = new PerpEngine(IERC20(address(usdc)), feed, 0, px, TestParams.defaults());
+        PerpEngine.Params memory bp = TestParams.defaults();
+        bp.maxSize = type(uint256).max; // extremes, not the per-account cap
+        PerpEngine big = new PerpEngine(IERC20(address(usdc)), feed, 0, px, bp);
         deal(address(usdc), address(this), 1e36);
         usdc.approve(address(big), 1e36);
         big.seedVault(Usdc.wrap(1e36)); // enough capacity for any size below

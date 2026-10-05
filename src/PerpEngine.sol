@@ -30,6 +30,7 @@ contract PerpEngine is ReentrancyGuard {
         uint256 skewScale; // |skew| at which imbalance is "full" (base units, 1e18)
         uint256 stressMove; // opens must leave the vault solvent after this adverse move, 1e18
         uint256 minSize; // smallest position (base units, 1e18)
+        uint256 maxSize; // largest position per account (base units, 1e18)
         uint256 initialMarginRate; // of notional, 1e18 (0.1e18 = 10x)
         uint256 maintenanceMarginRate; // of notional, 1e18
         uint256 tradeFeeRate; // of notional, open and close, to the vault, 1e18
@@ -68,6 +69,7 @@ contract PerpEngine is ReentrancyGuard {
     uint256 public immutable skewScale;
     uint256 public immutable stressMove;
     uint256 public immutable minSize;
+    uint256 public immutable maxSize;
     uint256 public immutable initialMarginRate;
     uint256 public immutable maintenanceMarginRate;
     uint256 public immutable tradeFeeRate;
@@ -95,7 +97,7 @@ contract PerpEngine is ReentrancyGuard {
     mapping(address => Order) public orders;
 
     event OrderCommitted(address indexed account, int256 size, Usdc margin, bool isClose, uint64 settleAt);
-    event OrderRejected(address indexed account, bytes reason);
+    event OrderRejected(address indexed account, bytes reason, Usdc feeKept);
     event OrderCancelled(address indexed account);
     event MarketUpdated(uint64 time, int256 premium, int256 fundingIndex, uint256 price, int256 consensusRate);
     event Opened(address indexed account, int256 size, uint256 price, Usdc deposit, Usdc fee);
@@ -121,6 +123,7 @@ contract PerpEngine is ReentrancyGuard {
     error ConfidenceTooWide(uint256 price, uint256 conf);
     error VaultCapacityExceeded(UsdWad stressLoss, UsdWad available);
     error BelowMinSize(uint256 size, uint256 minSize);
+    error AboveMaxSize(uint256 size, uint256 maxSize);
     error MarginBelowFee(Usdc margin, Usdc fee);
     error InsufficientMargin(MarginStatic deposit, MarginDynamic required);
     error NotLiquidatable(UsdWad equity, MarginDynamic maintenance);
@@ -148,6 +151,7 @@ contract PerpEngine is ReentrancyGuard {
         skewScale = p.skewScale;
         stressMove = p.stressMove;
         minSize = p.minSize;
+        maxSize = p.maxSize;
         initialMarginRate = p.initialMarginRate;
         maintenanceMarginRate = p.maintenanceMarginRate;
         tradeFeeRate = p.tradeFeeRate;
@@ -167,6 +171,7 @@ contract PerpEngine is ReentrancyGuard {
     /// so the trader cannot know the fill price when signing and nobody can choose it afterwards.
     function commitOpen(int256 size, Usdc margin) external nonReentrant {
         if (_abs(size) < minSize) revert BelowMinSize(_abs(size), minSize);
+        if (_abs(size) > maxSize) revert AboveMaxSize(_abs(size), maxSize);
         if (opensPaused) revert OpensArePaused();
         if (feed.isStale(feedMarket)) revert FeedStale();
         if (positions[msg.sender].size != 0) revert PositionExists();
@@ -208,8 +213,13 @@ contract PerpEngine is ReentrancyGuard {
                 // An empty reason is how running out of gas looks. Rejecting then would let a trader who
                 // settles their own order refuse an unfavourable fill by sending too little gas.
                 if (reason.length == 0) revert SettlementOutOfGas();
-                usdc.safeTransfer(account, Usdc.unwrap(o.margin));
-                emit OrderRejected(account, reason);
+                // Margin is the trader's choice: committing too little and being refunded whenever the print
+                // moves against you would be a free option. That rejection keeps the open fee; rejections the
+                // trader cannot cause (pause, stale feed, vault capacity, oracle confidence) refund in full.
+                Usdc kept = _isMarginShortfall(reason) ? _rejectionFee(o, price, conf) : Usdc.wrap(0);
+                vaultCash = vaultCash + kept;
+                usdc.safeTransfer(account, Usdc.unwrap(o.margin - kept));
+                emit OrderRejected(account, reason, kept);
             }
         }
         _refund(oracleFee);
@@ -476,6 +486,25 @@ contract PerpEngine is ReentrancyGuard {
         return WadMath.mulDivFloor(size, SafeCast.toInt(entryPrice), WAD);
     }
 
+    function _isMarginShortfall(bytes memory reason) internal pure returns (bool) {
+        bytes4 sel = bytes4(reason);
+        return sel == InsufficientMargin.selector || sel == MarginBelowFee.selector;
+    }
+
+    /// The open fee the order would have paid at its fill price, never more than its margin.
+    function _rejectionFee(Order memory o, uint256 price, uint256 conf) internal view returns (Usdc) {
+        Usdc fee = _tradeFee(_abs(o.size), _execPrice(price, conf, o.size > 0));
+        return fee > o.margin ? o.margin : fee;
+    }
+
+    /// The open fee on `absSize` at `price`, rounded up to cash: the same rule for opens and for rejections.
+    function _tradeFee(uint256 absSize, uint256 price) internal view returns (Usdc) {
+        return
+            Units.toUsdcUp(
+                UsdWad.wrap(WadMath.mulDivCeil(_notionalUp(absSize, price), SafeCast.toInt(tradeFeeRate), WAD))
+            );
+    }
+
     /// Open fee first, then the rest must cover initial margin (both rounded against the trader).
     function _depositAfterFee(uint256 absSize, uint256 price, Usdc margin)
         internal
@@ -483,7 +512,7 @@ contract PerpEngine is ReentrancyGuard {
         returns (MarginStatic deposit, Usdc fee)
     {
         int256 notional = _notionalUp(absSize, price);
-        fee = Units.toUsdcUp(UsdWad.wrap(WadMath.mulDivCeil(notional, SafeCast.toInt(tradeFeeRate), WAD)));
+        fee = _tradeFee(absSize, price);
         if (margin < fee) revert MarginBelowFee(margin, fee);
         deposit = Units.deposit(margin - fee);
         MarginDynamic initial =

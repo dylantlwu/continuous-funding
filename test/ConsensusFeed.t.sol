@@ -13,8 +13,9 @@ contract ConsensusFeedTest is Test {
     int256 constant M = type(int256).min; // MISSING
 
     function setUp() public {
-        vm.warp(1_000_000);
+        vm.warp(1_000_000 - 3600); // deployed an hour ago: the first post below may move c by up to an hour of slew
         feed = TestParams.newFeed(relayer);
+        vm.warp(1_000_000);
     }
 
     function _post(int256 r, uint64 observedAt) internal {
@@ -57,13 +58,32 @@ contract ConsensusFeedTest is Test {
 
     // Without this, an extreme venue rate in a squeeze would revert, the feed would go stale, and the market
     // would stop accepting risk exactly when it matters; instead the value is clamped and logged.
-    // The first post starts from 0, so a compromised relayer cannot open at the cap either.
     function test_outOfRangeValuesAreClampedNotRejected() public {
-        _post(500 * APR_1PCT, uint64(block.timestamp)); // first post: one step from 0
-        assertEq(feed.rate(0), 5 * APR_1PCT);
+        _post(500 * APR_1PCT, uint64(block.timestamp)); // an hour of slew is available: only the ±100% cap binds
+        assertEq(feed.rate(0), 100 * APR_1PCT);
         vm.warp(block.timestamp + 60);
-        _post(-100 * APR_1PCT, uint64(block.timestamp)); // one more step down
-        assertEq(feed.rate(0), 0);
+        _post(-100 * APR_1PCT, uint64(block.timestamp)); // one minute later: at most 5% APR of change
+        assertEq(feed.rate(0), 100 * APR_1PCT - 60 * TestParams.SLEW); // 5% APR, slew rounded up per second
+    }
+
+    // Without this, a relayer key used right after deployment could open c at the cap: the first post is bounded
+    // by the time since the feed was deployed, from 0.
+    function test_firstPostIsBoundedByTimeSinceDeployment() public {
+        ConsensusFeed fresh = TestParams.newFeed(relayer);
+        vm.warp(block.timestamp + 60);
+        vm.prank(relayer);
+        fresh.post(0, uint64(block.timestamp), TestParams.venues(500 * APR_1PCT));
+        assertEq(fresh.rate(0), 60 * TestParams.SLEW, "one minute after deployment: one minute of slew");
+    }
+
+    // Review finding (2026-10-05). Without this, a c posted rarely could stay far behind the venues: a fixed
+    // per-post step needed one post per 5% of catch-up, so a hedged trader could farm the gap from the vault.
+    // The bound is on change over time, so one post after a quiet spell catches up as far as time allows.
+    function test_aQuietSpellIsCaughtUpInOnePost() public {
+        _post(5 * APR_1PCT, uint64(block.timestamp));
+        vm.warp(block.timestamp + 20 minutes);
+        _post(60 * APR_1PCT, uint64(block.timestamp));
+        assertEq(feed.rate(0), 60 * APR_1PCT, "20 minutes allow up to 100% APR of change");
     }
 
     // F2 regression. Without this, a relayer posting once per second (or many times in one block) could walk

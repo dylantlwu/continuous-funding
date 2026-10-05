@@ -36,8 +36,10 @@ class FakeChain:
     def __init__(self, answers, ts=1_000, reverts=()):
         self.answers, self.ts, self.reverts, self.sent, self.simulated = answers, ts, set(reverts), [], []
         self.address = "0x" + "11" * 20
+        self.read_at = []  # (signature, block) of every eth_call
 
     def call(self, to, signature, types=(), args=(), out=(), value=0, sender=None, block="latest"):
+        self.read_at.append((signature, block))
         if signature in self.reverts:
             raise RpcError(f"{signature}: execution reverted")
         if signature in ("settle(address,bytes[])", "liquidate(address,bytes[])"):
@@ -343,6 +345,17 @@ class KeeperSettlement(unittest.TestCase):
         k.keep_c_fresh()
         self.assertEqual(posts, [(3595, keeper.POST_MOVE_WAD)],
                          "positions open: post on a 0.25%-a-year move, or when c is about an hour old")
+
+    # Without this, a market sample labelled with block N would hold values read a moment later at "latest" (seen
+    # live: p off by 4,404 wei a second, about 2 s of drift), so re-reading block N on chain would not match it.
+    def test_market_samples_are_read_at_the_block_they_are_labelled_with(self):
+        k, c, _ = self.make((0, 0, 0, False), ts=1_100)
+        c.answers.update({"currentRate()": (1, 2, 3), "longOI()": (0,), "shortOI()": (5,), "vaultCash()": (7,),
+                          "fundingIndexNow()": (9,)})
+        c.read_at.clear()
+        k.sample(1_100, 100)
+        self.assertEqual({b for _, b in c.read_at}, {hex(100)})
+        self.assertEqual(len(c.read_at), 5)
 
     # Without this, an order nobody settled in time would keep the trader's margin in escrow forever.
     def test_cancels_expired_orders_so_the_margin_goes_back(self):

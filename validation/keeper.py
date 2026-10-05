@@ -157,9 +157,10 @@ class Keeper:
 
     # ------------------------------------------------------------ c while positions are open; market samples
 
-    def _open_interest(self):
+    def _open_interest(self, block="latest"):
         c = self.chain.call
-        return (c(self.engine, "longOI()", out=["uint256"])[0], c(self.engine, "shortOI()", out=["uint256"])[0])
+        return (c(self.engine, "longOI()", out=["uint256"], block=block)[0],
+                c(self.engine, "shortOI()", out=["uint256"], block=block)[0])
 
     def keep_c_fresh(self):
         """While anything accrues or waits to fill, post c once the median is `move_wad` away from it or c is
@@ -177,10 +178,11 @@ class Keeper:
         if time.time() - self._last_sample < self.sample_every_s:
             return
         self._last_sample = time.time()
-        c, p, _ = self.chain.call(self.engine, "currentRate()", out=["int256", "int256", "int256"])
-        long_oi, short_oi = self._open_interest()
-        vault = self.chain.call(self.engine, "vaultCash()", out=["uint256"])[0]
-        index = self.chain.call(self.engine, "fundingIndexNow()", out=["int256"])[0]
+        at = hex(block)  # every value read at the block the sample is labelled with, so anyone can re-read it
+        c, p, _ = self.chain.call(self.engine, "currentRate()", out=["int256", "int256", "int256"], block=at)
+        long_oi, short_oi = self._open_interest(at)
+        vault = self.chain.call(self.engine, "vaultCash()", out=["uint256"], block=at)[0]
+        index = self.chain.call(self.engine, "fundingIndexNow()", out=["int256"], block=at)[0]
         self.db.execute("INSERT OR REPLACE INTO market_samples VALUES (?,?,?,?,?,?,?,?,?)",
                         (self.engine, now_ts, block, str(c), str(p), str(long_oi), str(short_oi), str(vault), str(index)))
         self.db.commit()

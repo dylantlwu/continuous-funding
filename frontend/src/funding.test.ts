@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { approxLiquidationPrice, aprPct, cadences, cStatus, marginFor, nextSettlement, type RatePoint } from "./funding";
+import { approxLiquidationPrice, aprPct, cadences, cStatus, marginFor, nextSettlement, sparkRange, type RatePoint } from "./funding";
 
 const H = 3_600_000;
 const tenPctPerSecond = (0.1 / (365 * 24 * 3600)) * 1e18; // 10% APR as a per-second rate, 1e18
@@ -78,5 +78,25 @@ describe("c status badge", () => {
     expect(old.text).toBe("c 50 min old · 0.10% off median");
     expect(old.due).toBe(false);
     expect(cStatus(1_000, 1_030, wad(4), wad(4.3)).due).toBe(true);
+  });
+});
+
+describe("p sparkline range", () => {
+  // Without this, a p moving 0.025% a year per hour (0.5 BTC of skew) is drawn inside a fixed ±5% band and looks
+  // like a flat line: the chart would say "p does not move" when it does.
+  it("fits a small move so it fills most of the chart", () => {
+    const [lo, hi] = sparkRange([0, -0.004, -0.012], 5);
+    expect(hi - lo).toBeLessThan(0.02);
+    expect(0.012 / (hi - lo)).toBeGreaterThan(0.8);
+  });
+  // Without this, an all-negative p would be drawn without its zero line and could be read as positive.
+  it("always shows zero, and never more than the band", () => {
+    expect(sparkRange([-0.5, -0.4], 5)[1]).toBeGreaterThan(0);
+    expect(sparkRange([4.99, 5], 5)).toEqual([-0.5, 5]);
+  });
+  // Without this, an empty book (p exactly 0 for hours) would divide by a zero range.
+  it("gives a flat series a non-zero range", () => {
+    const [lo, hi] = sparkRange([0, 0, 0], 5);
+    expect(hi - lo).toBeGreaterThan(0);
   });
 });

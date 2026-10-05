@@ -108,3 +108,12 @@ export function cStatus(lastPostS: number, nowS: number, cWad: number, medianWad
   const gap = Math.abs(aprPct(medianWad) - aprPct(cWad));
   return { text: `c ${age} old · ${gap.toFixed(2)}% off median`, due: gap >= POST_MOVE_APR };
 }
+
+/** Vertical range of the p sparkline, in % a year: fitted to the samples, so a p that moves 0.025% an hour is
+ * visible instead of a flat line inside the ±5% band; always includes 0, because the sign of p (which side pays)
+ * is what the chart is for; never wider than the band p is bounded to. */
+export function sparkRange(values: number[], band: number, minSpan = 0.001): [lo: number, hi: number] {
+  const lo = Math.min(0, ...values), hi = Math.max(0, ...values);
+  const pad = Math.max((hi - lo) * 0.1, minSpan / 2);
+  return [Math.max(-band, lo - pad), Math.min(band, hi + pad)];
+}

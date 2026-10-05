@@ -14,7 +14,12 @@ import {Config} from "./Config.sol";
 /// Deploys TestUSDC, ConsensusFeed, PythPriceSource and PerpEngine, seeds the vault, and writes the
 /// addresses to $DEPLOY_OUT (default deployments/monad-testnet.json).
 ///
-///   forge script script/Deploy.s.sol --rpc-url $MONAD_TESTNET_RPC --broadcast
+///   forge clean && forge script script/Deploy.s.sol --rpc-url $MONAD_TESTNET_RPC --broadcast --slow \
+///     --gas-estimate-multiplier 200
+///
+/// `forge clean` first: a stale compile cache once deployed a build whose comments differed from the
+/// committed source (same code, different metadata hash), which Sourcify then only partially matched.
+/// Monad charges the gas limit and reprices cold state access, so limits come from the node's estimate.
 ///
 /// Env: PRIVATE_KEY (deployer, testnet only), RELAYER (default: the deployer), DEPLOY_OUT.
 contract Deploy is Script {

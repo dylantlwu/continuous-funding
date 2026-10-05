@@ -206,9 +206,7 @@ contract PerpEngine is ReentrancyGuard {
             try this.executeOpen(account, o.size, o.margin, price, conf) {}
             catch (bytes memory reason) {
                 // An empty reason is how running out of gas looks. Rejecting then would let a trader who
-                // settles their own order refuse an unfavourable fill by sending too little gas. Today the
-                // 63/64 rule already leaves too little gas to refund after an inner out-of-gas; this keeps
-                // it impossible if costs change.
+                // settles their own order refuse an unfavourable fill by sending too little gas.
                 if (reason.length == 0) revert SettlementOutOfGas();
                 usdc.safeTransfer(account, Usdc.unwrap(o.margin));
                 emit OrderRejected(account, reason);

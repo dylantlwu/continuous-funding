@@ -8,6 +8,6 @@ export default defineConfig({
   build: { outDir: "../validation/static/app", emptyOutDir: true },
   server: {
     port: 5173,
-    proxy: { "/api": { target: process.env.BACKEND ?? "https://recorder-production-7e4f.up.railway.app", changeOrigin: true } },
+    proxy: { "/api": { target: process.env.BACKEND ?? "https://continuous-funding.up.railway.app", changeOrigin: true } },
   },
 });

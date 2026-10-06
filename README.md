@@ -6,7 +6,7 @@ premium driven by this market's own long/short imbalance, bounded to ±5% a year
 in every block that touches the market and accrued per second. Orders fill at the first Pyth price published
 2 seconds after they are committed, so no one, trader or settler, chooses the price.
 
-**Live on Monad testnet:** https://recorder-production-7e4f.up.railway.app
+**Live on Monad testnet:** https://continuous-funding.up.railway.app
 Monad Metropolis · Track 01 Onchain Finance & Trading · testnet only · not audited
 
 - [What it is](#what-it-is) · [Try it](#try-it) · [Why Monad](#why-monad) · [Architecture](#architecture)
@@ -56,7 +56,7 @@ two-step fills do that.
 
 ## Try it
 
-1. Open https://recorder-production-7e4f.up.railway.app with MetaMask (or any injected EVM wallet). The page
+1. Open https://continuous-funding.up.railway.app with MetaMask (or any injected EVM wallet). The page
    adds or switches to Monad Testnet (chain 10143).
 2. Get a little testnet MON for gas at https://faucet.monad.xyz.
 3. Click **Get 10,000 test USDC**. Test USDC is free and worthless.

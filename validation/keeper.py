@@ -11,6 +11,7 @@ interest and vault cash with free reads, for the market history chart.
 Progress (last scanned block, known accounts) is kept in the recorder's SQLite so a restart resumes instead of
 rescanning: Monad's public RPC serves at most 100 blocks per eth_getLogs.
 """
+import os
 import time
 import traceback
 
@@ -22,7 +23,8 @@ from .chain import RpcError, selector, topic
 T_ORDER = topic("OrderCommitted(address,int256,uint256,bool,uint64)")
 T_OPENED = topic("Opened(address,int256,uint256,uint256,uint256)")
 NOT_LIQUIDATABLE = selector("NotLiquidatable(int256,uint256)").hex()
-PAGE = 100
+# Blocks per eth_getLogs: Monad's public RPC serves 100, Alchemy's Monad endpoint 1,000 (measured 2026-10-06).
+PAGE = int(os.environ.get("KEEPER_LOG_PAGE", "100"))
 # Owner, 2026-10-05: post c on a 0.25%-a-year move or hourly, not on a 2-minute timer. Replayed on 24 h of minute
 # medians: about 117 posts a day instead of 720 (1.1 MON instead of 6.7 at 0.0092 MON a post), and the worst gap
 # between c and the median falls from 1.34% to 0.25% a year, since a jump is posted at the next check.

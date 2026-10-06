@@ -94,7 +94,7 @@ policy, and leverage up to 25x).
   and `p` moves on the same clock.
 - **Built for how Monad charges gas.** Monad charges the gas **limit** and reprices cold state access, so every
   write sets its limit from the node's own estimate (plus 15% from the browser, 5% for the relayer's
-  fixed-cost post). Monad's public RPC serves 100 blocks per `eth_getLogs`, so the keeper keeps a cursor in
+  fixed-cost post). Monad's public RPC serves 100 blocks per `eth_getLogs` and Alchemy's 1,000, so the keeper keeps a cursor in
   storage and never rescans.
 - **Pyth's first-print proof works on Monad testnet.** Checked with `eth_call` against the Monad testnet Pyth
   contract before relying on it: the first print after a time is accepted and a later one is refused.
@@ -175,7 +175,8 @@ forge clean && forge script script/Deploy.s.sol --rpc-url $MONAD_TESTNET_RPC --b
 | Variable | Meaning |
 |---|---|
 | `PERP_ENGINE` | Engine address; everything else is read from chain |
-| `MONAD_RPC` | RPC URL |
+| `MONAD_RPC` | RPC URL. The deployed backend uses [Alchemy](https://www.alchemy.com)'s Monad testnet endpoint |
+| `KEEPER_LOG_PAGE` | Blocks per `eth_getLogs` scan: 100 on the public RPC (default), 1,000 on Alchemy |
 | `PRIVATE_KEY` | Must be the feed's relayer |
 | `PYTH_API_KEY` | Hermes key; it stays on the server |
 | `PUBLIC_API_ONLY=1` | Serve only the front-end and its API |

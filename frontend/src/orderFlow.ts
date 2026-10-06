@@ -18,7 +18,8 @@ async function readOrder(cfg: ChainConfig, account: Address) {
   return { commitTime: Number(o[2]), isClose: o[3] };
 }
 
-/** Before an open: make sure the on-chain consensus is fresh (the relayer posts only when asked). */
+/** Before an open: a commit needs a fresh feed, so if c would go stale within 5 minutes (before the trader
+ * confirms), ask the relayer to post first. While positions are open the keeper keeps it fresh anyway. */
 async function ensureFreshFeed(cfg: ChainConfig, progress: Progress) {
   const f = { address: cfg.feed, abi: abis.consensusFeedAbi } as const;
   const [stale, last, block] = await Promise.all([
@@ -26,7 +27,7 @@ async function ensureFreshFeed(cfg: ChainConfig, progress: Progress) {
     client.readContract({ ...f, functionName: "lastPostTime", args: [0] }),
     client.getBlock(),
   ]);
-  if (!stale && Number(block.timestamp) - Number(last) < 180) return;
+  if (!stale && Number(block.timestamp) - Number(last) < cfg.staleAfter - 300) return;
   progress("wake", "Posting the five venues' rates on-chain (the relayer pays)…");
   await api.wake().catch((e) => { if (e.status !== 429) throw e; }); // 429: someone just asked; the post is coming
   for (let i = 0; i < 30; i++) {

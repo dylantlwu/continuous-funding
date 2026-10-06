@@ -58,7 +58,7 @@ export function CadenceChart({ points, now }: { points: RatePoint[]; now: number
   return (
     <div ref={ref} className="chart-wrap">
       <div className="clocks">
-        <span className="chip signal">ours: <b>every second</b></span>
+        <span className="chip signal">accrued <b>every second</b></span>
         <span className="chip">hourly venues settle in <b>{countdown(nextSettlement(now, 1) - now)}</b></span>
         <span className="chip">8-hour venues settle in <b>{countdown(nextSettlement(now, 8) - now)}</b></span>
       </div>

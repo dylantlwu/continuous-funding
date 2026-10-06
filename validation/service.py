@@ -9,8 +9,8 @@ Chain (needs PERP_ENGINE, MONAD_RPC; signing needs PRIVATE_KEY = the feed's rela
   GET  /api/market/history?hours=24      c, p, open interest and vault cash sampled by the keeper every 5 minutes
   GET  /api/pyth/latest       newest signed Pyth update (the key stays on this server)
   GET  /api/pyth/at?t=UNIX    first signed Pyth print at or after t, which settling an order requires
-  POST /api/wake              post the venue rates on-chain if the feed is older than 3 minutes (before an open)
-The only endpoint that spends gas is /api/wake, and it posts at most once per 3 minutes whoever calls it.
+  POST /api/wake              before an open: post the venue rates if c would go stale within 5 minutes
+The only endpoint that spends gas is /api/wake, and it posts at most once per (staleAfter - 5 min) whoever calls it.
 PUBLIC_API_ONLY=1 (set on the public domain): only the chain endpoints, /healthz and the front-end (built into
 static/app/, served at /) answer; the research dashboard and its data stay private (owner, 2026-10-05).
 """
@@ -83,7 +83,8 @@ class Handler(BaseHTTPRequestHandler):
                 _wake_seen[ip] = time.time()
                 db = recorder.open_db()
                 try:
-                    res = relayer.post_if_needed(CHAIN, CHAIN_CFG["feed"], db, int(time.time() * 1000))
+                    res = relayer.post_if_needed(CHAIN, CHAIN_CFG["feed"], db, int(time.time() * 1000),
+                                                 min_age_s=CHAIN_CFG["staleAfter"] - 300)
                 finally:
                     db.close()
                 return self._json(200, res)
@@ -201,6 +202,10 @@ def chain_setup():
                  "feedId": "0x" + c(source, "feedId()", out=["bytes32"])[0].hex(),
                  "settleDelay": c(e, "settleDelay()", out=["uint64"])[0], "orderTtl": c(e, "orderTtl()", out=["uint64"])[0],
                  "relayer": c(c(e, "feed()", out=["address"])[0], "relayer()", out=["address"])[0],
+                 "staleAfter": c(c(e, "feed()", out=["address"])[0], "staleAfter()", out=["uint64"])[0],
+                 # 1e18-scaled, as the contract stores them: the page derives max leverage and liquidation prices
+                 "initialMarginRate": str(c(e, "initialMarginRate()", out=["uint256"])[0]),
+                 "maintenanceMarginRate": str(c(e, "maintenanceMarginRate()", out=["uint256"])[0]),
                  "signer": CHAIN.address}
     if CHAIN.address and CHAIN.address.lower() != CHAIN_CFG["relayer"].lower():
         raise SystemExit(f"PRIVATE_KEY is {CHAIN.address}, but the feed's relayer is {CHAIN_CFG['relayer']}")

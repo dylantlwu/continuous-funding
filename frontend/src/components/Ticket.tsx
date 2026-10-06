@@ -6,7 +6,7 @@ import { approxLiquidationPrice, marginFor, usd } from "../funding";
 import { faucet, openPosition, type Outcome, type Step } from "../orderFlow";
 
 const STEPS: { key: Step; label: string }[] = [
-  { key: "wake", label: "Refresh c on-chain, only if it is older than 3 minutes" },
+  { key: "wake", label: "Refresh c on-chain, only if it is about to go stale" },
   { key: "commit", label: "Commit size and margin. No price yet" },
   { key: "wait", label: "Wait for the first Pyth print 2 s after the commit" },
   { key: "fill", label: "The keeper settles at that print. Anyone can, at the same price" },
@@ -29,7 +29,9 @@ export function Ticket({ cfg, account, mine, price, conf, onConnect, busy, setBu
   const entry = price && conf != null ? (side === "long" ? price + conf : price - conf) : null;
   const margin = entry ? marginFor(sizeBtc, entry, lev) : 0;
   const fee = entry ? sizeBtc * entry * 0.0005 : 0;
-  const liq = entry ? approxLiquidationPrice(signed, entry, margin - fee) : 0;
+  const mmr = cfg ? Number(cfg.maintenanceMarginRate) / 1e18 : null;
+  const maxLev = cfg ? Math.round(1e18 / Number(cfg.initialMarginRate)) : 10;
+  const liq = entry && mmr != null ? approxLiquidationPrice(signed, entry, margin - fee, mmr) : 0;
   const hasPosition = !!mine && mine.position[0] !== 0n;
   const hasOrder = !!mine && mine.order[2] !== 0n;
   const usdcBal = mine ? Number(mine.usdc) / 1e6 : 0;
@@ -75,7 +77,7 @@ export function Ticket({ cfg, account, mine, price, conf, onConnect, busy, setBu
         <div className="field">
           <label><span>Leverage</span><span className="mono">{lev}x</span></label>
           <div className="levs">
-            {[1, 2, 5, 10].map((l) => (
+            {[1, 2, 5, 10, 25].filter((l) => l <= maxLev).map((l) => (
               <button key={l} className={lev === l ? "on" : ""} onClick={() => setLev(l)} disabled={busy}>{l}x</button>
             ))}
           </div>

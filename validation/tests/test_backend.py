@@ -317,12 +317,12 @@ class KeeperSettlement(unittest.TestCase):
         self.assertEqual(c.sent[0][0], "settle(address,bytes[])")
         self.assertEqual(posts, [], "a fresh feed needs no post")
 
-    # Without this, a keeper outage of more than 5 minutes would make every pending open get rejected (refunded)
-    # at settlement because the feed went stale meanwhile.
-    def test_posts_first_if_the_feed_went_stale_before_settling_an_open(self):
+    # Without this, the keeper would pay for a post before settling whenever c is old, though since v3 only the
+    # commit needs a fresh feed (PerpEngine.executeOpen no longer checks it).
+    def test_settles_an_open_without_posting_even_if_the_feed_is_stale(self):
         k, c, posts = self.make((10**18, 10**9, 1_000, False), ts=1_020, stale=True)
         k.settle_due(1_020)
-        self.assertEqual(posts, [0])
+        self.assertEqual(posts, [])
         self.assertEqual(c.sent[0][0], "settle(address,bytes[])")
 
     # Without this, a settlement that would revert (bad data, insolvency) would cost gas on every retry.

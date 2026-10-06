@@ -60,12 +60,14 @@ describe("pre-trade estimates", () => {
   });
 
   // Without this, the "≈" liquidation price could use a different formula from the contract's
-  // liquidationPrice view (same algebra: equity = 5% of notional).
+  // liquidationPrice view (same algebra: equity = maintenance rate x notional, the rate read from the contract).
   it("liquidation estimate solves equity = maintenance", () => {
-    const p = approxLiquidationPrice(1, 100_000, 10_000);
-    expect(10_000 + (p - 100_000)).toBeCloseTo(0.05 * p, 6);
-    const s = approxLiquidationPrice(-1, 100_000, 10_000);
-    expect(10_000 - (s - 100_000)).toBeCloseTo(0.05 * s, 6);
+    for (const mmr of [0.02, 0.05]) {
+      const p = approxLiquidationPrice(1, 100_000, 4_000, mmr);
+      expect(4_000 + (p - 100_000)).toBeCloseTo(mmr * p, 6);
+      const s = approxLiquidationPrice(-1, 100_000, 4_000, mmr);
+      expect(4_000 - (s - 100_000)).toBeCloseTo(mmr * s, 6);
+    }
   });
 });
 

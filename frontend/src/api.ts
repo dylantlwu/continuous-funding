@@ -13,6 +13,9 @@ export type ChainConfig = {
   settleDelay: number;
   orderTtl: number;
   relayer: Address;
+  staleAfter: number; // ConsensusFeed: seconds without a post before new commits are refused
+  initialMarginRate: string; // PerpEngine, 1e18-scaled: max leverage = 1 / this
+  maintenanceMarginRate: string; // PerpEngine, 1e18-scaled
 };
 
 export type PythPrint = { price: number; conf: number; expo: number; publish_time: number; update: Hex };

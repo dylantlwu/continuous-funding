@@ -150,7 +150,7 @@ export function App() {
           <p>The first BTC print at or after t + 2 s is the only one the contract accepts; Pyth's own contract proves it is the first.</p>
         </div>
         <div>
-          <div className="t">≈ t + 4 s</div>
+          <div className="t">≈ t + 5 s</div>
           <h3>The keeper settles</h3>
           <p>One wallet confirmation per trade: the keeper fills the order at that print a moment later. Anyone can, at the same price. Fast blocks are what make this feel instant.</p>
         </div>
@@ -161,7 +161,11 @@ export function App() {
           <h4>Read before you trade</h4>
           <ul>
             <li>Testnet only. Test USDC has no value. Not audited.</li>
-            <li>c is posted on-chain before an open, and while positions are open whenever the live median moves 0.25% a year from it, or at least hourly; between posts it stays at its last value and open positions accrue at it. A post never re-prices the past.</li>
+            {cfg && (() => {
+              const maxLev = Math.round(1e18 / Number(cfg.initialMarginRate)), mmr = Number(cfg.maintenanceMarginRate) / 1e16;
+              return <li>Up to {maxLev}x, isolated margin. A {maxLev}x position is liquidated after a move of about {100 / maxLev - mmr}% against it (maintenance margin {mmr}%).</li>;
+            })()}
+            <li>c is posted on-chain while positions are open whenever the live median moves 0.25% a year from it, or at least hourly, and before an open if it is over 70 minutes old; between posts it stays at its last value and open positions accrue at it. A post never re-prices the past.</li>
             <li>One relayer key reports the five venue rates; the contract takes the median and limits c to ±100% a year, moving at most 5% a year per minute. Every reported value is public in the feed's events.</li>
             <li>Opens are refused when the vault could not survive a 25% move against the larger side. If the vault cannot pay a winning close, the close reverts rather than paying less.</li>
             <li>Need gas? <a href={FAUCET} target="_blank" rel="noreferrer">Monad testnet faucet</a>.</li>

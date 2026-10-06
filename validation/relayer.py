@@ -87,9 +87,10 @@ def venue_rates(db, now_ms, max_age_ms=MAX_DELAY_S * 1000):
 
 
 def post_if_needed(chain, feed, db, now_ms, min_age_s=180, move_wad=None):
-    """Post unless the feed was posted within `min_age_s`. 180 s leaves a trader at least two minutes to
-    confirm the commit before the feed (stale after 300 s) would refuse it, and caps a flood of wake calls at
-    one post per three minutes. Raises (never posts a partial or stale set) if fewer than three venues are fresh.
+    """Post unless the feed was posted within `min_age_s`. A wake before an open passes the feed's staleAfter
+    minus 5 minutes: it posts only when c would go stale before the trader confirms the commit, and a flood of
+    wake calls costs at most one post. Raises (never posts a partial or stale set) if fewer than three venues
+    are fresh.
 
     With `move_wad` (the keeper, while positions are open) it also posts inside that window once the median is
     at least `move_wad` from c on chain: a deviation trigger plus a heartbeat, as push oracles do. The median is

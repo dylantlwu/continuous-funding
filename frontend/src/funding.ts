@@ -73,7 +73,7 @@ export function marginFor(sizeBtc: number, price: number, leverage: number, feeR
 
 /** ≈ liquidation price for a new position, the contract's formula with no funding yet:
  * P = (size·entry − deposit) / (size − mmr·|size|). The exact value is read from the contract after the fill. */
-export function approxLiquidationPrice(sizeBtc: number, entry: number, deposit: number, mmr = 0.05): number {
+export function approxLiquidationPrice(sizeBtc: number, entry: number, deposit: number, mmr: number): number {
   const den = sizeBtc - mmr * Math.abs(sizeBtc);
   const p = (sizeBtc * entry - deposit) / den;
   return p > 0 ? p : 0;

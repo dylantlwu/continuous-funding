@@ -100,8 +100,6 @@ class Keeper:
                 del self.pending[acct]
                 acted.append(("cancel", acct, tx))
                 continue
-            if not is_close and self.chain.call(self.feed, "isStale(uint8)", ["uint8"], [0], ["bool"])[0]:
-                self.post_if_needed(min_age_s=0)  # an open is rejected at settlement if the feed went stale
             try:
                 upd = hermes.at(self.feed_id, at)
             except hermes.HermesError:

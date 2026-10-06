@@ -9,6 +9,8 @@ export PATH="$HOME/.foundry/bin:$PATH"
 anvil --fork-url "$MONAD_TESTNET_RPC" --port 8548 --block-time 1 --silent & ANVIL=$!
 trap 'kill $ANVIL ${SVC:-} 2>/dev/null || true' EXIT
 for _ in $(seq 60); do cast chain-id --rpc-url http://127.0.0.1:8548 >/dev/null 2>&1 && break; sleep 0.5; done
+# Any key works, including a new one with no testnet MON: the fork funds it locally.
+cast rpc anvil_setBalance "$DEPLOYER" 0x56BC75E2D63100000 --rpc-url http://127.0.0.1:8548 >/dev/null
 # Deploy the current contracts onto the fork, reusing the testnet TestUSDC and price source as a real upgrade would.
 V1=deployments/monad-testnet-v1.json
 USDC=$(python3 -c "import json; print(json.load(open('$V1'))['testUsdc'])") \

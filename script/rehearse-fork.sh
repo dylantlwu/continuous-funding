@@ -54,6 +54,8 @@ expect_revert() { # $1 = error signature, rest = cast call args
 }
 
 step "deploy (forge reads PRIVATE_KEY from .env)"
+# Any key works, including a new one with no testnet MON: the fork funds it locally.
+cast rpc anvil_setBalance "$DEPLOYER" 0x56BC75E2D63100000 --rpc-url "$RPC" >/dev/null
 DEPLOY_OUT=$OUT forge script script/Deploy.s.sol --rpc-url "$RPC" --broadcast >/tmp/cf-rehearse-deploy.log 2>&1 ||
   { tail -30 /tmp/cf-rehearse-deploy.log; exit 1; }
 grep -E "PerpEngine|ConsensusFeed|PythPriceSource|TestUSDC|vault cash" /tmp/cf-rehearse-deploy.log | sed 's/^ *//'

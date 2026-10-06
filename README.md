@@ -60,7 +60,8 @@ two-step fills do that.
    adds or switches to Monad Testnet (chain 10143).
 2. Get a little testnet MON for gas at https://faucet.monad.xyz.
 3. Click **Get 10,000 test USDC**. Test USDC is free and worthless.
-4. Choose long or short, a size (0.001 to 10 BTC) and leverage (up to 25x), then confirm once in your wallet. If
+4. Choose long or short, a size (0.001 to 10 BTC) and leverage (up to 25x), then confirm once in your wallet (your
+   first trade also asks you to approve test USDC, once). If
    the on-chain `c` is about to go stale (over 70 minutes old), the backend posts it first. The keeper fills the
    order at the first Pyth print 2 seconds after your commit; there is no second confirmation.
 5. Watch the funding owed on your position change every block, then close it the same way.
@@ -179,8 +180,10 @@ forge clean && forge script script/Deploy.s.sol --rpc-url $MONAD_TESTNET_RPC --b
 | `PYTH_API_KEY` | Hermes key; it stays on the server |
 | `PUBLIC_API_ONLY=1` | Serve only the front-end and its API |
 
-**Local rehearsals on a Monad testnet fork** (no testnet funds): [script/rehearse-fork.sh](script/rehearse-fork.sh),
+**Local rehearsals on a Monad testnet fork**: [script/rehearse-fork.sh](script/rehearse-fork.sh),
 [script/rehearse-backend-fork.sh](script/rehearse-backend-fork.sh), [script/fork-stack.sh](script/fork-stack.sh).
+They need a `.env` with a Pyth Hermes API key (Pyth requires one to fetch prices) and any private key: a new key
+with no testnet MON works, because the fork funds it locally. Nothing is sent to the testnet.
 
 ## Trust model and known limits
 

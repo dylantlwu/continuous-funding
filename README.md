@@ -124,6 +124,7 @@ policy, and leverage up to 25x).
 | `Units`, `Margin` | [src/lib/Units.sol](src/lib/Units.sol) | Value types (`Usdc`, `UsdWad`, `MarginStatic`, `MarginDynamic`) and the only two places margins meet |
 | `ConsensusFeed` | [src/ConsensusFeed.sol](src/ConsensusFeed.sol) | Takes five venue rates, computes the median, clamps it, keeps its time integral |
 | `IFundingFeed` | [src/interfaces/IFundingFeed.sol](src/interfaces/IFundingFeed.sol) | The feed's read side, for other markets that anchor to `c` ([docs/feed.md](docs/feed.md)) |
+| Indexer | [indexer/](indexer/) | [Envio](https://envio.dev) HyperIndex: activity totals, every trade, the market's funding record and every feed post |
 | `PythPriceSource` | [src/PythPriceSource.sol](src/PythPriceSource.sol) | Pyth adapter: the latest price, or the first print at or after a time |
 | Front-end | [frontend/](frontend/) | The page above; ABI generated from the build output |
 | Backend | [validation/](validation/) | Recorder, relayer, keeper, API. The same folder holds the research engine and vault simulation behind the design |
@@ -150,7 +151,7 @@ because of a billing lock on the GitHub account, not because of test failures.
 
 ## Run it yourself
 
-Prerequisites: [Foundry](https://getfoundry.sh), Node 22, Python 3.11+.
+Prerequisites: [Foundry](https://getfoundry.sh), Node 22, pnpm (for the indexer), Python 3.11+.
 
 ```bash
 git clone https://github.com/dylantlwu/continuous-funding && cd continuous-funding
@@ -160,6 +161,7 @@ bash script/check-compile-fail.sh             # T4
 python3 -m venv validation/.venv && validation/.venv/bin/pip install -r validation/requirements.txt
 validation/.venv/bin/python -m unittest discover -s validation/tests -t .
 npm ci --prefix frontend && npm test --prefix frontend
+(cd indexer && pnpm install && pnpm test)        # Envio indexer
 ```
 
 **Front-end against the live backend:** `npm --prefix frontend run dev` (it proxies `/api` to the deployed backend).

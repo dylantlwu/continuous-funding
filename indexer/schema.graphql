@@ -1,0 +1,54 @@
+# Totals for the page's activity strip. One row, id "global".
+type Stats {
+  id: ID!
+  traders: Int!            # distinct accounts with at least one fill
+  fills: Int!              # opens filled
+  closes: Int!
+  liquidations: Int!
+  rejections: Int!         # opens rejected at the fill price
+  volumeUsd: BigInt!       # sum of |size| x price over opens, closes and liquidations, 1e18
+  feesUsdc: BigInt!        # open, close and kept rejection fees, 6 decimals
+  vaultSeeded: BigInt!     # 6 decimals
+  vaultWithdrawn: BigInt!  # 6 decimals; realised vault P&L = vaultCash on chain - (seeded - withdrawn)
+}
+
+type Trader {
+  id: ID!                  # lowercase address
+  fills: Int!
+  closes: Int!
+  liquidations: Int!
+}
+
+# Every fill, close and liquidation, newest first by block.
+type Trade {
+  id: ID!
+  kind: String!            # "open" | "close" | "liquidation"
+  account: String!
+  size: BigInt!            # 1e18, negative = short
+  price: BigInt!           # 1e18
+  block: Int!
+  time: Int!
+  txHash: String!
+}
+
+# The market's own record of funding: lets anyone chart the on-chain funding index and p over time.
+type MarketPoint {
+  id: ID!
+  time: BigInt!
+  premium: BigInt!         # p, per second, 1e18
+  fundingIndex: BigInt!
+  price: BigInt!
+  consensusRate: BigInt!   # c, per second, 1e18
+  block: Int!
+}
+
+# Every value the relayer reported, so the median can be rechecked.
+type FeedPost {
+  id: ID!
+  median: BigInt!
+  applied: BigInt!
+  observedAt: BigInt!
+  venueRates: [BigInt!]!   # Binance, OKX, Bybit, Hyperliquid, Bitget; int256 min = missing
+  block: Int!
+  txHash: String!
+}

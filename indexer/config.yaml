@@ -1,0 +1,27 @@
+# yaml-language-server: $schema=./node_modules/envio/evm.schema.json
+# Indexes Continuous Funding v3 on Monad testnet for the page's activity strip and the on-chain funding history.
+name: continuous-funding-indexer
+disable_default_cross_chain: true
+field_selection:
+  transaction_fields:
+  - hash
+chains:
+- id: 10143
+  start_block: 68564233 # v3 deployment (deployments/monad-testnet.json)
+  contracts:
+  - name: PerpEngine
+    address:
+    - "0x1a13dbC366aB86CABdfAD3739A7BB607041B442a"
+    events:
+    - event: Opened(address indexed account, int256 size, uint256 price, uint256 deposit, uint256 fee)
+    - event: Closed(address indexed account, int256 size, uint256 price, int256 pnl, int256 funding, uint256 fee, uint256 payout)
+    - event: Liquidated(address indexed account, address indexed liquidator, int256 size, uint256 price, uint256 conf, uint256 reward)
+    - event: OrderRejected(address indexed account, bytes reason, uint256 feeKept)
+    - event: MarketUpdated(uint64 time, int256 premium, int256 fundingIndex, uint256 price, int256 consensusRate)
+    - event: VaultSeeded(uint256 amount)
+    - event: VaultWithdrawn(uint256 amount)
+  - name: ConsensusFeed
+    address:
+    - "0x4210FC24D1e0114AE3B3977301dDcbBbA252eF85"
+    events:
+    - event: Posted(uint8 indexed market, int256 median, int256 applied, uint64 observedAt, int256[5] venueRates)

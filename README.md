@@ -243,7 +243,7 @@ market-making and arbitrage trader who previously ran a production perpetual exc
 | **Claude Code** (Anthropic) | Wrote all of the code, tests, scripts and documentation in this repository, under the author's direction. |
 | **The author** | Made the domain decisions: funding as `c + p`, the ±5% band and the velocity, the vault's priority, the stress level, two-step fills, the relayer's posting policy, fees and parameters. He reviewed the results and traded on testnet. |
 | **Independent AI review sessions** | Audited the contracts and reviewed the project as hackathon judges. Their findings were fixed and recorded in the commit history. |
-| **Demo video** | The narration is synthetic speech (Microsoft Edge text-to-speech, an English voice) reading a script Claude drafted and the author approved. The overlays and explanatory animation were written as code by Claude and rendered frame by frame. The product footage is real screen recording of the live app and its testnet transactions. |
+| **Demo video** | The narration is synthetic speech (Microsoft Edge text-to-speech, voice `en-US-BrianNeural`) reading a script Claude drafted and the author approved; there is no music. The overlays and explanatory animation were written as code by Claude and rendered frame by frame. The product footage is real screen recording of the live app and its testnet transactions. |
 
 Commits do not carry AI co-author trailers, at the author's preference; this section is the disclosure.
 

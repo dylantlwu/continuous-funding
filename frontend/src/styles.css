@@ -186,7 +186,7 @@ button { font: inherit; cursor: pointer; }
 @keyframes in { to { opacity: 1; transform: none; } }
 
 /* grid children may shrink below their content (the chart's svg), or a phone screen scrolls sideways */
-.hero > *, .row > *, .foot > * { min-width: 0; }
+.hero > *, .foot > * { min-width: 0; }
 @media (max-width: 640px) {
   .page { padding: 0 14px 48px; }
   .top, .live { flex-wrap: wrap; }

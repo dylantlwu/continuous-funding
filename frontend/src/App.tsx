@@ -1,14 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Address } from "viem";
 import { api, pythConf, pythPrice, pythWad, type ChainConfig, type Consensus, type MarketSample, type PythPrint } from "./api";
-import { EXPLORER, client, connect, existingAccount, explain, readAll, type Market, type Mine } from "./chain";
+import { EXPLORER, FAUCET, client, connect, existingAccount, explain, readAll, type Market, type Mine } from "./chain";
 import { CadenceChart } from "./components/CadenceChart";
 import { PositionCard } from "./components/PositionCard";
 import { RateCard } from "./components/RateCard";
 import { Ticket } from "./components/Ticket";
 import { cStatus, type RatePoint } from "./funding";
 
-const FAUCET = "https://faucet.monad.xyz"; // docs.monad.xyz/developer-essentials/testnets
 const REPO = "https://github.com/dylantlwu/continuous-funding";
 
 export function App() {

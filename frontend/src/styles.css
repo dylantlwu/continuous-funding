@@ -143,6 +143,8 @@ button { font: inherit; cursor: pointer; }
 .field { margin-top: 14px; }
 .field label { display: flex; justify-content: space-between; font-size: 12.5px; color: var(--ink-3); margin-bottom: 6px; }
 .field input { width: 100%; border: 1px solid var(--rule); border-radius: 10px; padding: 11px 12px; font: 18px var(--mono); background: var(--paper); color: var(--ink); }
+.addm { display: grid; grid-template-columns: 1fr auto; gap: 8px; }
+.addm .btn { padding: 10px 18px; }
 .field input:focus { outline: 2px solid var(--signal-soft); border-color: var(--signal); }
 .levs { display: flex; gap: 6px; }
 .levs button { flex: 1; border: 1px solid var(--rule); background: var(--paper); border-radius: 8px; padding: 7px 0; font: 13px var(--mono); }
@@ -183,6 +185,14 @@ button { font: inherit; cursor: pointer; }
 .d1 { animation-delay: 0.05s; } .d2 { animation-delay: 0.15s; } .d3 { animation-delay: 0.25s; } .d4 { animation-delay: 0.35s; } .d5 { animation-delay: 0.45s; }
 @keyframes in { to { opacity: 1; transform: none; } }
 
+/* grid children may shrink below their content (the chart's svg), or a phone screen scrolls sideways */
+.hero > *, .row > *, .foot > * { min-width: 0; }
+@media (max-width: 640px) {
+  .page { padding: 0 14px 48px; }
+  .top, .live { flex-wrap: wrap; }
+  .live { gap: 6px 12px; }
+  .venues { grid-template-columns: repeat(3, 1fr); }
+}
 @media (max-width: 1050px) {
   .hero, .row, .foot { grid-template-columns: 1fr; }
   .how { grid-template-columns: 1fr; }

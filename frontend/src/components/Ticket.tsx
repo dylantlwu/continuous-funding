@@ -1,7 +1,7 @@
 import { useState } from "react";
 import type { Address } from "viem";
 import type { ChainConfig } from "../api";
-import { EXPLORER, explain, type Mine } from "../chain";
+import { EXPLORER, FAUCET, MIN_MON, explain, type Mine } from "../chain";
 import { approxLiquidationPrice, marginFor, usd } from "../funding";
 import { faucet, openPosition, type Outcome, type Step } from "../orderFlow";
 
@@ -92,6 +92,10 @@ export function Ticket({ cfg, account, mine, price, conf, onConnect, busy, setBu
 
         {!account ? (
           <button className="btn signal" style={{ width: "100%", marginTop: 16 }} onClick={onConnect}>Connect wallet</button>
+        ) : mine && mine.mon < MIN_MON ? (
+          <a className="btn" style={{ display: "block", textAlign: "center", marginTop: 16 }} href={FAUCET} target="_blank" rel="noreferrer">
+            Get testnet MON for gas first (faucet)
+          </a>
         ) : usdcBal < margin ? (
           <button className="btn" style={{ width: "100%", marginTop: 16 }} onClick={getUsdc} disabled={busy}>Get 10,000 test USDC</button>
         ) : (

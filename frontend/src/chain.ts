@@ -21,6 +21,9 @@ import { consensusFeedAbi, perpEngineAbi, priceSourceAbi, testUsdcAbi } from "./
 import type { ChainConfig } from "./api";
 
 export const EXPLORER = "https://testnet.monadvision.com"; // Sourcify-verified sources show here (docs.monad.xyz)
+export const FAUCET = "https://faucet.monad.xyz"; // docs.monad.xyz/developer-essentials/testnets
+/** Below this a trade's transactions may not be affordable (a commit is about 0.03 MON at Monad's 100 gwei floor). */
+export const MIN_MON = 5n * 10n ** 16n;
 export const chain = monadTestnet;
 // VITE_RPC lets a local rehearsal point the app at an anvil fork of Monad testnet; production uses the default.
 const RPC = (import.meta.env.VITE_RPC as string | undefined) || undefined;
@@ -105,6 +108,7 @@ const FRIENDLY: Record<string, string> = {
   NoPosition: "There is no position to close.",
   NoOrder: "This order was already settled.",
   OrderExpired: "This order expired unfilled; its margin can be returned.",
+  OrderNotExpired: "The order can be cancelled only after its 60-second deadline.",
   ERC20InsufficientBalance: "Not enough test USDC. Use the faucet first.",
   OverFaucetMax: "The faucet gives at most 100,000 test USDC per call.",
 };

@@ -132,6 +132,19 @@ export async function closePosition(cfg: ChainConfig, account: Address, progress
   return out;
 }
 
+/** Add test USDC to an open position's deposit, which moves its liquidation price away. Approves first if needed. */
+export async function addMargin(cfg: ChainConfig, account: Address, usdAmount: number) {
+  const amount = parseUnits(usdAmount.toFixed(2), 6);
+  const allowance = await client.readContract({ address: cfg.usdc, abi: abis.testUsdcAbi, functionName: "allowance", args: [account, cfg.engine] });
+  if (allowance < amount) await write(account, cfg.usdc, abis.testUsdcAbi, "approve", [cfg.engine, maxUint256]);
+  return write(account, cfg.engine, abis.perpEngineAbi, "addMargin", [amount]);
+}
+
+/** An order nobody settled before its deadline (fill time + 60 s): cancel it and get an open's margin back. */
+export async function cancelExpired(cfg: ChainConfig, account: Address) {
+  return write(account, cfg.engine, abis.perpEngineAbi, "cancelExpired", [account]);
+}
+
 export async function faucet(cfg: ChainConfig, account: Address) {
   await write(account, cfg.usdc, abis.testUsdcAbi, "mint", [account, 10_000_000_000n]);
 }

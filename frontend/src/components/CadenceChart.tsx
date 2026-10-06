@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { cadences, countdown, nextSettlement, usd, type RatePoint } from "../funding";
 
 const H = 3_600_000;
@@ -7,19 +7,21 @@ const NOTIONAL = 10_000;
 /** The demo's hero: one rate history, three settlement cadences. Ours accrues every second (smooth); venues
  * that settle hourly or every 8 hours pay the same money later, in steps. */
 export function CadenceChart({ points, now }: { points: RatePoint[]; now: number }) {
-  const ref = useRef<HTMLDivElement>(null);
   const [w, setW] = useState(760);
-  useEffect(() => {
-    const el = ref.current;
+  const ro = useRef<ResizeObserver | null>(null);
+  // A callback ref, so the observer follows the element when the loading box is replaced by the chart;
+  // observing only the first element left the chart at its initial 760 px (wider than a phone).
+  const ref = useCallback((el: HTMLDivElement | null) => {
+    ro.current?.disconnect();
     if (!el) return;
-    const ro = new ResizeObserver(([e]) => setW(Math.max(320, e.contentRect.width)));
-    ro.observe(el);
-    return () => ro.disconnect();
+    ro.current = new ResizeObserver(([e]) => setW(Math.max(280, e.contentRect.width)));
+    ro.current.observe(el);
   }, []);
-
   const data = useMemo(() => cadences(points, NOTIONAL, now), [points, now]);
+  const ready = data.length >= 2;
+
   const h = 340, padL = 54, padR = 220, padT = 18, padB = 34;
-  if (data.length < 2) return <div ref={ref} className="chart-wrap empty">Loading the last 24 hours of rates…</div>;
+  if (!ready) return <div ref={ref} className="chart-wrap empty">Loading the last 24 hours of rates…</div>;
 
   const t0 = data[0].t, t1 = data[data.length - 1].t;
   const ys = data.flatMap((d) => [d.smooth, d.hourly, d.eightHour]);

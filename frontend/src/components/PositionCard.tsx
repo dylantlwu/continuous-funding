@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import type { Address } from "viem";
 import type { ChainConfig } from "../api";
-import { EXPLORER, explain, type Mine } from "../chain";
+import { EXPLORER, MIN_MON, explain, type Mine } from "../chain";
 import { usd } from "../funding";
-import { closePosition, type Outcome, type Step } from "../orderFlow";
+import { addMargin, cancelExpired, closePosition, type Outcome, type Step } from "../orderFlow";
 
 /** Every number here that involves money comes from the contract (positions, positionValue, liquidationPrice),
  * read every block; nothing is recomputed in the browser. */
@@ -15,6 +15,7 @@ export function PositionCard({ cfg, account, mine, price, block, busy, setBusy }
   const [note, setNote] = useState("");
   const [result, setResult] = useState<Outcome | null>(null);
   const [err, setErr] = useState("");
+  const [addAmt, setAddAmt] = useState("500");
   const owedRef = useRef<HTMLDivElement>(null);
   const prevOwed = useRef<bigint | null>(null);
 
@@ -26,6 +27,10 @@ export function PositionCard({ cfg, account, mine, price, block, busy, setBusy }
   const equity = deposit + pnl - owed;
   const liq = mine ? Number(mine.liquidationPrice) / 1e18 : 0;
   const pending = mine && mine.order[2] !== 0n;
+  // Anyone may cancel an order nobody settled by its deadline; the keeper normally settles within seconds.
+  const deadline = mine && cfg ? Number(mine.order[2]) + cfg.settleDelay + cfg.orderTtl : 0;
+  const expired = !!pending && Date.now() / 1000 > deadline + 2;
+  const lowMon = !!mine && mine.mon < MIN_MON;
 
   useEffect(() => { // flash the funding figure whenever a new block changes it
     const v = mine?.value?.[1] ?? null;
@@ -45,6 +50,20 @@ export function PositionCard({ cfg, account, mine, price, block, busy, setBusy }
     finally { setBusy(false); setStep(null); }
   }
 
+  async function run(label: string, f: () => Promise<{ transactionHash: string }>) {
+    setBusy(true); setErr(""); setResult(null);
+    try { const r = await f(); setResult({ ok: true, text: label, tx: r.transactionHash }); }
+    catch (e) { setErr(explain(e)); }
+    finally { setBusy(false); }
+  }
+
+  const cancelButton = expired && cfg && account && (
+    <button className="btn ghost" style={{ width: "100%", marginTop: 12 }} disabled={busy}
+            onClick={() => run("Order cancelled; any margin was returned.", () => cancelExpired(cfg, account))}>
+      Nobody settled it in time: cancel and refund
+    </button>
+  );
+
   return (
     <section className="card reveal d5">
       <div className="card-h">
@@ -55,7 +74,10 @@ export function PositionCard({ cfg, account, mine, price, block, busy, setBusy }
         {!account ? (
           <div className="empty">Connect a wallet to see your position.</div>
         ) : size === 0 ? (
-          <div className="empty">{pending ? "Your order is waiting for its fill price…" : "No position. Open one and watch its funding accrue every block."}</div>
+          <>
+            <div className="empty">{pending ? "Your order is waiting for its fill price…" : "No position. Open one and watch its funding accrue every block."}</div>
+            {cancelButton}
+          </>
         ) : (
           <>
             <div className="eyebrow">funding owed since entry · re-read every block, accrues per second</div>
@@ -73,9 +95,20 @@ export function PositionCard({ cfg, account, mine, price, block, busy, setBusy }
               <dt>liquidation price</dt><dd className="signal">{liq ? usd(liq, 0) : "none"}</dd>
               <dt>distance to liquidation</dt><dd>{liq && price ? `${((Math.abs(price - liq) / price) * 100).toFixed(2)}%` : "—"}</dd>
             </dl>
-            <button className="btn ghost" style={{ width: "100%", marginTop: 16 }} onClick={close} disabled={busy || !!pending}>
-              {pending ? "Close waiting to fill…" : "Close position"}
+            <div className="field">
+              <label><span>Add margin (test USDC)</span><span className="mono">moves the liquidation price away</span></label>
+              <div className="addm">
+                <input className="mono" inputMode="decimal" value={addAmt} onChange={(e) => setAddAmt(e.target.value)} disabled={busy} aria-label="Margin to add in USDC" />
+                <button className="btn ghost" disabled={busy || !!pending || !(Number(addAmt) > 0) || lowMon}
+                        onClick={() => cfg && account && run(`Added ${usd(Number(addAmt))} margin.`, () => addMargin(cfg, account, Number(addAmt)))}>
+                  Add
+                </button>
+              </div>
+            </div>
+            <button className="btn ghost" style={{ width: "100%", marginTop: 16 }} onClick={close} disabled={busy || !!pending || lowMon}>
+              {pending ? "Close waiting to fill…" : lowMon ? "Need testnet MON for gas" : "Close position"}
             </button>
+            {cancelButton}
           </>
         )}
         {step && note && <div className="msg">{note}</div>}

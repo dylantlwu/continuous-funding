@@ -261,6 +261,19 @@ contract TradingTest is Test {
         assertEq(_size(traders[0]), 1e18, "filled, not refunded");
     }
 
+    // Without this, a trader settling their own order could send just too little gas: the fill would fail with an
+    // empty reason, count as a rejection and refund the margin in full, a free way to refuse an unwanted fill.
+    // An empty reason must revert the whole settlement instead.
+    function test_aFillThatRunsOutOfGasRevertsTheSettlement() public {
+        _commitOpen(traders[0], 1e18, 10_050e6);
+        vm.warp(block.timestamp + DELAY);
+        _price(P0, 0);
+        vm.mockCallRevert(address(eng), abi.encodeWithSelector(PerpEngine.executeOpen.selector), bytes(""));
+        vm.prank(keeper);
+        vm.expectRevert(PerpEngine.SettlementOutOfGas.selector);
+        eng.settle(traders[0], none);
+    }
+
     // Without this, an open could be priced off a wide-confidence (uncertain) print, or a bad fill would
     // revert and leave the order stuck: it is rejected at settlement and the margin goes back.
     function test_T6_wideConfidenceRejectsOpenAtSettlement() public {

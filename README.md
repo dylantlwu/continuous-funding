@@ -121,6 +121,7 @@ policy, and leverage up to 25x).
 | `Funding` | [src/lib/Funding.sol](src/lib/Funding.sol) | Closed-form integral of the bounded premium `p` |
 | `Units`, `Margin` | [src/lib/Units.sol](src/lib/Units.sol) | Value types (`Usdc`, `UsdWad`, `MarginStatic`, `MarginDynamic`) and the only two places margins meet |
 | `ConsensusFeed` | [src/ConsensusFeed.sol](src/ConsensusFeed.sol) | Takes five venue rates, computes the median, clamps it, keeps its time integral |
+| `IFundingFeed` | [src/interfaces/IFundingFeed.sol](src/interfaces/IFundingFeed.sol) | The feed's read side, for other markets that anchor to `c` ([docs/feed.md](docs/feed.md)) |
 | `PythPriceSource` | [src/PythPriceSource.sol](src/PythPriceSource.sol) | Pyth adapter: the latest price, or the first print at or after a time |
 | Front-end | [frontend/](frontend/) | The page above; ABI generated from the build output |
 | Backend | [validation/](validation/) | Recorder, relayer, keeper, API. The same folder holds the research engine and vault simulation behind the design |
@@ -204,6 +205,18 @@ forge clean && forge script script/Deploy.s.sol --rpc-url $MONAD_TESTNET_RPC --b
 - **Accrual price.** Funding between touches accrues at the price of the last touch; anyone can `poke` to
   refresh it.
 - **Testnet only.** Not audited. Test USDC has no value.
+
+## Path forward
+
+- **The feed, for other Monad perps.** `c` is useful beyond this market: any vault-backed perp can anchor its
+  own funding to it and keep charging its own imbalance premium on top. [docs/feed.md](docs/feed.md) shows the
+  one-line read, exact accrual across posts, the on-chain bounds and how to check every reported value; the
+  example there is compiled and tested. Running the hourly heartbeat independently of this market's book is
+  a configuration change.
+- **Fewer trusted parties.** Several independent posters, or venue funding signed at the source, instead of
+  one relayer key; separate keys for the owner, the relayer and the keeper.
+- **The vault.** LP shares with a withdrawal rule that cannot front-run realised losses; a borrow fee on open
+  interest so that occupying capacity costs money; an audit before any mainnet value.
 
 ## Prior art
 

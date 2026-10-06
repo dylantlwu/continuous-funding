@@ -75,6 +75,8 @@ Sourcify and on [sourcify.dev](https://sourcify.dev)):
 | ConsensusFeed | [`0x4210FC24D1e0114AE3B3977301dDcbBbA252eF85`](https://testnet.monadvision.com/address/0x4210FC24D1e0114AE3B3977301dDcbBbA252eF85) |
 | PythPriceSource | [`0x27fD7bEb9836c7FCe9C4E7CFF8CbF33e887A8236`](https://testnet.monadvision.com/address/0x27fD7bEb9836c7FCe9C4E7CFF8CbF33e887A8236) |
 | TestUSDC | [`0x65DaBeFE62B7B43e861920699A6B158496946e09`](https://testnet.monadvision.com/address/0x65DaBeFE62B7B43e861920699A6B158496946e09) |
+| ConsensusFeed (CRE edition) | [`0xBF155844e2c79066130e2802c34B274598884526`](https://testnet.monadvision.com/address/0xBF155844e2c79066130e2802c34B274598884526) |
+| CreFeedReceiver | [`0xB297B253Ebe15d1D4b15aA56e54a52bEDd1b3c20`](https://testnet.monadvision.com/address/0xB297B253Ebe15d1D4b15aA56e54a52bEDd1b3c20) |
 
 Deployment record: [deployments/monad-testnet.json](deployments/monad-testnet.json) (v3). Earlier versions stay on
 chain: [v1](deployments/monad-testnet-v1.json) and [v2](deployments/monad-testnet-v2.json), each replaced after an
@@ -125,6 +127,7 @@ policy, and leverage up to 25x).
 | `ConsensusFeed` | [src/ConsensusFeed.sol](src/ConsensusFeed.sol) | Takes five venue rates, computes the median, clamps it, keeps its time integral |
 | `IFundingFeed` | [src/interfaces/IFundingFeed.sol](src/interfaces/IFundingFeed.sol) | The feed's read side, for other markets that anchor to `c` ([docs/feed.md](docs/feed.md)) |
 | Indexer | [indexer/](indexer/) | [Envio](https://envio.dev) HyperIndex: activity totals, every trade, the market's funding record and every feed post |
+| CRE workflow | [cre/](cre/), [src/cre/CreFeedReceiver.sol](src/cre/CreFeedReceiver.sol) | The relayer as a [Chainlink CRE](https://docs.chain.link/cre) workflow: every node of a DON reads the five venues, the nodes agree on each value, and the signed report reaches a ConsensusFeed through Chainlink's forwarder |
 | `PythPriceSource` | [src/PythPriceSource.sol](src/PythPriceSource.sol) | Pyth adapter: the latest price, or the first print at or after a time |
 | Front-end | [frontend/](frontend/) | The page above; ABI generated from the build output |
 | Backend | [validation/](validation/) | Recorder, relayer, keeper, API. The same folder holds the research engine and vault simulation behind the design |
@@ -144,8 +147,8 @@ Vite + React + TypeScript + viem.
 | T6, T9, T11–T13 | Bad data reverts. Feed bounds and median. Price windows. Vault capacity. Two-step fills (only the first print fills; no gas limit can turn a fill into a refund). |
 | Backend, front-end | Intent tests for the relayer, keeper and Hermes client (the API key is never forwarded on a redirect), path traversal, the chart arithmetic and receipt decoding. |
 
-Every test states the bug it would catch. [script/mutation-check.sh](script/mutation-check.sh) breaks 11
-protections one at a time and requires the suite to fail each time (11 of 11 caught). The CI workflow
+Every test states the bug it would catch. [script/mutation-check.sh](script/mutation-check.sh) breaks 12
+protections one at a time and requires the suite to fail each time (12 of 12 caught). The CI workflow
 ([.github/workflows/test.yml](.github/workflows/test.yml)) runs all of it; its runs are currently not starting
 because of a billing lock on the GitHub account, not because of test failures.
 
@@ -195,6 +198,11 @@ with no testnet MON works, because the fork funds it locally. Nothing is sent to
   relayer reports the five venue values: the contract takes their median and bounds the result, and every
   value is public in the feed's events. So the relayer is accountable, not trustless: it can misreport within
   the bounds, but not hide that it did. The owner can pause new opens and rotate the relayer, and nothing more.
+  The way out of the single key is in [cre/](cre/): the same five values posted by a Chainlink CRE workflow, read by
+  every node of a DON and agreed before signing, to a second feed with the same bounds. It has posted on Monad
+  testnet in CRE simulation through Chainlink's MockKeystoneForwarder (for example
+  [`0x528c9c81…`](https://testnet.monadvision.com/tx/0x528c9c816e2dd02f518482b1e0c92ad93b1038af283d45a330be619dff122984));
+  a production DON deployment is not done, and the market still reads the Python relayer's feed.
 - **Freshness of `c`.** Between posts (on a 0.25%-a-year move or hourly while positions are open), `c` stays at its last value,
   and a post never re-prices the past. With no positions the relayer does not post. After 75 minutes without a
   post the feed counts as stale and new commits are refused; closes and liquidations never wait for the feed.
@@ -220,8 +228,8 @@ with no testnet MON works, because the fork funds it locally. Nothing is sent to
   one-line read, exact accrual across posts, the on-chain bounds and how to check every reported value; the
   example there is compiled and tested. Running the hourly heartbeat independently of this market's book is
   a configuration change.
-- **Fewer trusted parties.** Several independent posters, or venue funding signed at the source, instead of
-  one relayer key; separate keys for the owner, the relayer and the keeper.
+- **Fewer trusted parties.** Move the market onto the CRE edition of the feed once the workflow runs on a production
+  DON, instead of one relayer key; separate keys for the owner, the relayer and the keeper.
 - **The vault.** LP shares with a withdrawal rule that cannot front-run realised losses; a borrow fee on open
   interest so that occupying capacity costs money; an audit before any mainnet value.
 
@@ -276,6 +284,9 @@ Commits do not carry AI co-author trailers, at the author's preference; this sec
 | [Pyth SDK for Solidity](https://github.com/pyth-network/pyth-sdk-solidity) v2.2.0 | Apache-2.0 |
 | [viem](https://viem.sh), [React](https://react.dev), [Vite](https://vite.dev), [eth-account](https://github.com/ethereum/eth-account), [eth-abi](https://github.com/ethereum/eth-abi) | MIT |
 | Instrument Serif, DM Mono, Hanken Grotesk, via [Fontsource](https://fontsource.org) | SIL Open Font License 1.1 |
+| [Envio HyperIndex](https://envio.dev) (`envio`, the indexer in `indexer/`) | Envio's own licence, not OSI-approved: self-hosting allowed, third-party hosting restricted |
+| [Chainlink CRE SDK](https://docs.chain.link/cre) (`@chainlink/cre-sdk`, the workflow in `cre/`) | BUSL-1.1: non-production use granted; becomes MIT on 2029-05-20. Installed as a dependency, not redistributed |
+| [zod](https://zod.dev) | MIT |
 
 Data comes from the public APIs of Binance, OKX, Bybit, Hyperliquid and Bitget, and from [Pyth](https://pyth.network)
 through Hermes.

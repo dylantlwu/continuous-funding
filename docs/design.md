@@ -341,8 +341,8 @@ arbitrage profit, `w` and cost sweeps, comparison with the velocity-only rule an
 | T12 | Vault capacity: open interest cannot be stacked on one side by opening and closing hedge legs; capacity is net of unrealised profit already owed; at most 10 BTC per account. |
 | T13 | Two-step orders: only the first Pyth print at or after commit + 2 s fills (earlier and non-first prints are refused); a pinned fill does not rewind the latest price; expired orders can only be cancelled; one order per account; liquidation clears a pending close; no gas limit turns a fill into a rejection (an out-of-gas fill reverts the settlement); an order committed on a fresh feed fills even if the feed goes stale before settlement; rejections the trader cannot cause refund in full, a margin shortfall keeps the open fee. |
 
-[script/mutation-check.sh](../script/mutation-check.sh) breaks 11 of these protections one at a time and requires
-a failing test for each (11 of 11 caught, 2026-10-06; its first run found the missing out-of-gas test).
+[script/mutation-check.sh](../script/mutation-check.sh) breaks 12 of these protections one at a time and requires
+a failing test for each (12 of 12 caught, 2026-10-07; its first run found the missing out-of-gas test).
 
 ## 12. Deliberately not doing
 

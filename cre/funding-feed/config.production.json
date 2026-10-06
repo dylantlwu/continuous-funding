@@ -1,7 +1,8 @@
 {
   "schedule": "0 */2 * * * *",
   "chainSelectorName": "monad-testnet",
-  "receiverAddress": "0x0000000000000000000000000000000000000000",
+  "receiverAddress": "0xB297B253Ebe15d1D4b15aA56e54a52bEDd1b3c20",
   "gasLimit": "400000",
-  "minVenues": 3
+  "minVenues": 3,
+  "feedAddress": "0xBF155844e2c79066130e2802c34B274598884526"
 }

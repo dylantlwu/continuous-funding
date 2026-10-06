@@ -12,7 +12,7 @@ export PATH="$HOME/.foundry/bin:$PATH"
 python3 - <<'EOF'
 import pathlib, subprocess, sys
 
-E, F = "src/PerpEngine.sol", "src/ConsensusFeed.sol"
+E, F, R = "src/PerpEngine.sol", "src/ConsensusFeed.sol", "src/cre/CreFeedReceiver.sol"
 MUTATIONS = [
     (E, "        if (_abs(size) > maxSize) revert AboveMaxSize(_abs(size), maxSize);\n", "",
      "per-account size cap removed"),
@@ -38,6 +38,8 @@ MUTATIONS = [
      "first post not bounded from deployment (c can jump on the first post)"),
     (F, "        int256 step = maxSlewPerSec * int256(uint256(block.timestamp - since));",
      "        int256 step = maxSlewPerSec * 60;", "per-post step cap instead of time (v1: c falls behind after a quiet spell)"),
+    (R, "        if (msg.sender != forwarder) revert NotForwarder(msg.sender);\n", "",
+     "CRE receiver accepts reports from anyone, not only Chainlink's forwarder"),
 ]
 
 escaped = 0

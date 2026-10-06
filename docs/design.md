@@ -1,9 +1,10 @@
 # Design: vault-protecting funding on Monad
 
-Status: v2 (2026-10-01), implemented in `src/` (2026-10-03) with the tests listed in §11, deployed on
-Monad testnet (2026-10-05; addresses in the README). v2 fixes the issues raised by two independent
-reviews of v1 (one clock instead of two, the free oracle option, liquidations blocked by global checks,
-LP run risk, feed liveness).
+Status: designed 2026-10-01, implemented in `src/` (2026-10-03) with the tests listed in §11, and deployed on
+Monad testnet three times, each version replaced after an independent review (v1 and v2 on 2026-10-05, v3 on
+2026-10-06; addresses in the README, changes in §10). The 2026-10-01 design already fixed issues raised by
+two independent reviews of the first draft (one clock instead of two, the free oracle option, liquidations
+blocked by global checks, LP run risk, feed liveness).
 
 ## 1. What this is
 
@@ -12,7 +13,7 @@ trade**, and the funding rate is
 
 ```
 rate = c + p
-c = cross-venue consensus funding (median of Binance, OKX, Bybit, Hyperliquid, Bitget), posted every minute
+c = cross-venue consensus funding (median of Binance, OKX, Bybit, Hyperliquid, Bitget), posted by a relayer (§5.4)
 p = our own inventory premium, driven by our long/short skew, |p| <= w = 5% APR
 ```
 
@@ -26,13 +27,9 @@ What funding does **not** do: it does not defend against fast, toxic flow. At 5%
 1.4 bp per day; a momentum trader does not notice it. Toxic flow is handled by the capacity rule (§8),
 trading fees and tight oracle freshness (§7), not by funding.
 
-Evidence so far (simulation, not proof): `validation/vault_sim.py` replays September 2026 BTC prices
-and real funding from five venues. All four crowd scenarios must be reported together: compared with
-`rate = c`, the hybrid lowered the standard deviation of vault PnL by 82% under persistent one-sided
-demand, 18% under a shock, 6% under noise, and not at all under momentum. In that run the modelled
-arbitrageurs lost money net of costs, which is why the vault's position shrank: these numbers are
-**not a claim** until arbitrage capacity responds to arbitrage profit and the run is reproducible from
-the repository with a fixed window and a committed data snapshot (open items, §10).
+How much `p` reduces the vault's risk is **not yet measured reproducibly**, so no figure is claimed here. A
+replay that counts needs arbitrage capacity that responds to arbitrage profit, a fixed window and a committed
+data snapshot (open item, §10).
 
 ## 2. Prior art (what is not new)
 
@@ -51,7 +48,7 @@ and the data used to choose its parameters.
 
 | Contract | Responsibility |
 |---|---|
-| `PerpEngine` | Vault cash (seeded by the owner, no LP shares in v1), BTC market, isolated positions, two-step orders, funding index, liquidation. One contract so all cash is in one place and conservation is checkable. |
+| `PerpEngine` | Vault cash (seeded by the owner, no LP shares yet), BTC market, isolated positions, two-step orders, funding index, liquidation. One contract so all cash is in one place and conservation is checkable. |
 | `ConsensusFeed` | Receives `c` from the relayer, clamps it to bounds, keeps a cumulative integral of `c` over time. Separate so the trust boundary is explicit. |
 | `PythPriceSource` | Adapter over the Pyth pull oracle behind `IPriceSource`: the latest price (bots) and the first price at or after a given time (order settlement), so it can be swapped for Pyth Pro or another source. |
 | `TestUSDC` | 6-decimal ERC-20 with an open faucet, testnet only. |
@@ -66,10 +63,11 @@ front-ends); the browser gets signed Pyth updates through that backend.
 **On-chain only when necessary (owner, 2026-10-05).** Everything shown continuously is computed
 off-chain from free reads: the five venue rates and their median (the recorder, every minute), the BTC
 price (Pyth through the backend), and `p`, the funding index, PnL and liquidation prices (contract
-views via `eth_call`). Transactions are sent only for: the relayer's post before an open (§5.4); order
-settlement, which **the trader sends from their own wallet** about 2 seconds after committing, with the
-keeper settling any order still pending after 10 seconds; and liquidations that a free `eth_call`
-simulation shows will succeed. Nothing is poked on a timer.
+views via `eth_call`). Transactions are sent only for: the relayer's posts (§5.4); order settlement, which
+**the keeper sends as soon as the fill print exists** (anyone can, at the same price; the page settles from the
+trader's wallet if the keeper has not 15 seconds after the fill time), so a trade takes one wallet
+confirmation; and liquidations that a free `eth_call` simulation shows will succeed. Nothing is poked on a
+timer.
 
 ## 4. Units, precision and types
 
@@ -189,8 +187,12 @@ history of their *predicted* funding; the recorder keeps it minute by minute, an
 so anyone can check each reported value afterwards, is planned, not done. After the hackathon: several
 posters, or oracle-signed venue funding.
 
-If no post arrives for 5 minutes the feed counts as stale: `c` stays frozen at its last value (no jump)
-and new opens wait for the next post. Closes and liquidations are never blocked by the feed.
+If no post arrives for 75 minutes the feed counts as stale: `c` stays frozen at its last value (no jump)
+and new commits wait for the next post; the page asks the relayer to post first when the feed is within 5
+minutes of going stale. Only the commit checks the feed, not the fill (v3), and closes and liquidations are
+never blocked by it. v2 used 5 minutes, which contradicted the hourly posting: the feed looked dead between
+posts, nearly every open needed a backend post first, and a commit in the last second could be refused at
+the fill for a full refund.
 
 ## 6. Margin: two types that cannot be mixed
 
@@ -201,7 +203,8 @@ and new opens wait for the next post. Closes and liquidations are never blocked 
 
 No conversion function exists. They meet only in `canOpen(...)` and `isLiquidatable(...)`, which use
 integer arithmetic without division. Test T4 compiles a file that assigns one to the other and
-asserts the compiler error. Parameters: 10x max leverage, 5% maintenance margin.
+asserts the compiler error. Parameters: 25x max leverage (4% initial margin), 2% maintenance margin (owner,
+2026-10-06, so that a liquidation can happen on testnet within an ordinary day's move; 10x and 5% before v3).
 
 ## 7. Prices, trading and liquidation
 
@@ -220,8 +223,9 @@ RPC call 2–3 s, before anyone confirms in a wallet. So trades are two-step, as
 
 The 2-second delay means the trader cannot have seen the fill price when signing. An open that fails its
 checks at the fill price is **rejected** rather than reverted, so no order can block the queue. A rejection
-the trader cannot cause (vault capacity, oracle confidence, a pause, a stale feed) refunds the margin in
-full. A margin shortfall keeps the open fee at the fill price and refunds the rest (2026-10-05): margin is
+the trader cannot cause (vault capacity, oracle confidence, a pause) refunds the margin in full. The
+feed's freshness is checked at the commit, not at the fill: otherwise a trader could commit in the last second
+before the feed goes stale and, if the print went against them, settle while it is stale for a full refund. A margin shortfall keeps the open fee at the fill price and refunds the rest (2026-10-05): margin is
 the trader's choice, and refunding it in full would make "commit just enough" a free option on the 2
 seconds, filled when the print is favourable and refunded when it is not. Running out of gas inside that check
 reverts the whole settlement instead of rejecting, so a trader settling their own order cannot refuse an
@@ -236,8 +240,9 @@ Trades also execute at the oracle price moved by its confidence interval **again
 **Bots use the latest price.** Liquidation and `poke` take the latest Pyth price: no older than the last
 price used, at most 3 seconds old (owner, 2026-10-03: liquidators get no wider window than traders).
 Liquidation checks health at the confidence-adjusted price in the trader's favour (long: price + conf,
-short: price − conf), so a wide-confidence wick cannot liquidate a healthy position. Whether a keeper
-meets 3 s from its host must be measured on the deployed keeper before launch.
+short: price − conf), so a wide-confidence wick cannot liquidate a healthy position. Measured from the deployed
+keeper's host (2026-10-05): Hermes 0.19 s, 0.21 s per RPC call, about 1.6 s from fetching the price to sending
+the transaction. No liquidation has happened on testnet yet.
 
 **Why Monad.** Two-step settlement is standard; what Monad changes is how it feels. A commit lands in
 about a second and the keeper can settle about a second after the fill time, so a trade fills a few
@@ -256,7 +261,7 @@ withdrawal, and at most 10 BTC per account (§8).
   cannot pay a winning trader, the close reverts with `VaultInsolvent` rather than paying less silently
   (owner, 2026-10-03). §8's capacity rule is what keeps this out of reach.
 - When a liquidation leaves negative equity, the vault absorbs it and emits `Shortfall(account, amount)`.
-  No insurance fund and no auto-deleveraging in v1; the shortfall ledger is explicit.
+  No insurance fund and no auto-deleveraging yet; the shortfall ledger is explicit.
 
 Liquidation is permissionless. The liquidator receives 0.5% of notional, paid by the vault even when the
 trader's equity cannot cover it (so underwater positions still get liquidated; the uncovered part is in
@@ -264,7 +269,7 @@ the `Shortfall`). Any remaining equity goes to the vault.
 
 ## 8. Vault risk limits
 
-- v1 vault is seeded by the owner; there are no LP shares, so nobody can withdraw ahead of traders'
+- The vault is seeded by the owner; there are no LP shares, so nobody can withdraw ahead of traders'
   realised profits (a withdrawal at cash value would let LPs exit before losses land). The owner can
   withdraw only when open interest is zero.
 - **Capacity rule (owner, 2026-10-03).** Every open must leave the vault solvent after a 25% adverse
@@ -288,12 +293,14 @@ the `Shortfall`). Any remaining equity goes to the vault.
 
 ## 9. Gas on Monad
 
-Monad charges the gas **limit**. The frontend sends fixed per-function limits from
-`forge test --gas-report` plus a small margin. Every call touches one market; accrual is O(1).
+Monad charges the gas **limit**, so every write sets its limit from the node's own estimate: plus 15% from the
+browser, 5% for the relayer's post (its gas is the same every time), 30% for the keeper. Every call touches
+one market; accrual is O(1).
 
 Testnet receipts (v1, 2026-10-05; on Monad `gasUsed` equals the limit charged): feed `post` 75,406
 (estimate × 1.05) · `commitOpen` 246,554 · `settle` (open, with Pyth verification) 544,601 · `commitClose`
-96,709 · `settle` (close) 497,922 (estimate × 1.3).
+96,709 · `settle` (close) 497,922 (estimate × 1.3). v2 feed `post`: 90,509 gas at 102 gwei, 0.0092 MON
+(block 68,438,127), which is why `c` is posted on a move or hourly rather than on a timer (§5.4).
 
 ## 10. Decisions
 
@@ -303,9 +310,12 @@ Pyth; the feed bounds and on-chain median (§5.4); the rounding rule (§4); the 
 first Pyth print 2 s after commit, cancellable after 60 s (§7); a 3-second window for the latest-price
 paths; minimum size 0.001 BTC; liquidation reward paid by the vault, remaining equity to the vault.
 After the fourth review (2026-10-05): the feed's bound is on change over time only (no per-post step);
-`c` is posted while there is open interest, on a 0.25%-a-year move or hourly; at most 10 BTC per account; a margin-shortfall
+`c` is posted while there is open interest, on a 0.25%-a-year move or hourly (decided the same day after a
+2-minute timer); at most 10 BTC per account; a margin-shortfall
 rejection keeps the open fee; the keeper settles orders as soon as the print exists (one wallet
-confirmation per trade); the faucet stays open.
+confirmation per trade); the faucet stays open. After the fifth review (2026-10-06): the feed is stale after
+75 minutes instead of 5, and a fill no longer re-checks it; max leverage 25x with 2% maintenance; a
+simulation figure for vault risk was removed until it is reproducible.
 
 Still provisional: fees (5 bp open/close, 0.5% liquidation); `skewScale` for the demo; scope cuts
 (owner-seeded vault without LP shares, BTC only, no partial close, no remove-margin, owner pause instead
@@ -328,11 +338,14 @@ arbitrage profit, `w` and cost sweeps, comparison with the velocity-only rule an
 | T10 | Golden vectors: the Python reference and the contract produce the same funding for a recorded scenario. |
 | T11 | Latest-price paths (liquidate, poke): any price older than 3 s or older than the last used price reverts; trades execute at price ± conf against the trader. |
 | T12 | Vault capacity: open interest cannot be stacked on one side by opening and closing hedge legs; capacity is net of unrealised profit already owed; at most 10 BTC per account. |
-| T13 | Two-step orders: only the first Pyth print at or after commit + 2 s fills (earlier and non-first prints are refused); a pinned fill does not rewind the latest price; expired orders can only be cancelled; one order per account; liquidation clears a pending close; no gas limit turns a fill into a rejection; rejections the trader cannot cause refund in full, a margin shortfall keeps the open fee. |
+| T13 | Two-step orders: only the first Pyth print at or after commit + 2 s fills (earlier and non-first prints are refused); a pinned fill does not rewind the latest price; expired orders can only be cancelled; one order per account; liquidation clears a pending close; no gas limit turns a fill into a rejection (an out-of-gas fill reverts the settlement); an order committed on a fresh feed fills even if the feed goes stale before settlement; rejections the trader cannot cause refund in full, a margin shortfall keeps the open fee. |
+
+[script/mutation-check.sh](../script/mutation-check.sh) breaks 11 of these protections one at a time and requires
+a failing test for each (11 of 11 caught, 2026-10-06; its first run found the missing out-of-gas test).
 
 ## 12. Deliberately not doing
 
-Order book; cross margin; multiple collateral; LP shares (v1); insurance fund and auto-deleveraging;
+Order book; cross margin; multiple collateral; LP shares (for now); insurance fund and auto-deleveraging;
 governance, token, upgradeable proxies; fee tiers; stock and commodity markets; mainnet.
 
 ## 13. What a judge sees in the demo

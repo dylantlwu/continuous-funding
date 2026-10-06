@@ -50,7 +50,9 @@ two-step fills do that.
 - **Overselling the vault.** Every open must leave the vault solvent after a 25% move against the larger side,
   net of profit it already owes; at most 10 BTC per account.
 - **A free option on the fill.** Committing just enough margin and being refunded whenever the print moves
-  against you: a margin-shortfall rejection keeps the open fee.
+  against you: a margin-shortfall rejection keeps the open fee. A commit needs a fresh feed but the fill does
+  not, so a fill cannot be refused by waiting for the feed to go stale, and a fill that runs out of gas reverts
+  the settlement instead of refunding.
 
 ## Try it
 
@@ -58,23 +60,25 @@ two-step fills do that.
    adds or switches to Monad Testnet (chain 10143).
 2. Get a little testnet MON for gas at https://faucet.monad.xyz.
 3. Click **Get 10,000 test USDC**. Test USDC is free and worthless.
-4. Choose long or short, a size (0.001 to 10 BTC) and leverage, then confirm once in your wallet. If the
-   on-chain `c` is older than three minutes, the backend posts it first. The keeper fills the order at the first
-   Pyth print 2 seconds after your commit; there is no second confirmation.
+4. Choose long or short, a size (0.001 to 10 BTC) and leverage (up to 25x), then confirm once in your wallet. If
+   the on-chain `c` is about to go stale (over 70 minutes old), the backend posts it first. The keeper fills the
+   order at the first Pyth print 2 seconds after your commit; there is no second confirmation.
 5. Watch the funding owed on your position change every block, then close it the same way.
 
-**Contracts on Monad testnet** (sources verified on [MonadVision](https://testnet.monadvision.com) via Sourcify,
-exact match):
+**Contracts on Monad testnet** (sources verified, exact match, on [MonadVision](https://testnet.monadvision.com)'s
+Sourcify and on [sourcify.dev](https://sourcify.dev)):
 
 | Contract | Address |
 |---|---|
-| PerpEngine | [`0xB228Cd8d7E5ad03B429D9ac3476c0C0a80909A59`](https://testnet.monadvision.com/address/0xB228Cd8d7E5ad03B429D9ac3476c0C0a80909A59) |
-| ConsensusFeed | [`0xed619331FF14A7b0Ca9116Dd86F4F40917D78D92`](https://testnet.monadvision.com/address/0xed619331FF14A7b0Ca9116Dd86F4F40917D78D92) |
+| PerpEngine | [`0x1a13dbC366aB86CABdfAD3739A7BB607041B442a`](https://testnet.monadvision.com/address/0x1a13dbC366aB86CABdfAD3739A7BB607041B442a) |
+| ConsensusFeed | [`0x4210FC24D1e0114AE3B3977301dDcbBbA252eF85`](https://testnet.monadvision.com/address/0x4210FC24D1e0114AE3B3977301dDcbBbA252eF85) |
 | PythPriceSource | [`0x27fD7bEb9836c7FCe9C4E7CFF8CbF33e887A8236`](https://testnet.monadvision.com/address/0x27fD7bEb9836c7FCe9C4E7CFF8CbF33e887A8236) |
 | TestUSDC | [`0x65DaBeFE62B7B43e861920699A6B158496946e09`](https://testnet.monadvision.com/address/0x65DaBeFE62B7B43e861920699A6B158496946e09) |
 
-Deployment record: [deployments/monad-testnet.json](deployments/monad-testnet.json). The first version (v1, before
-the fourth review's fixes) stays on chain: [deployments/monad-testnet-v1.json](deployments/monad-testnet-v1.json).
+Deployment record: [deployments/monad-testnet.json](deployments/monad-testnet.json) (v3). Earlier versions stay on
+chain: [v1](deployments/monad-testnet-v1.json) and [v2](deployments/monad-testnet-v2.json), each replaced after an
+independent review (v2: `c` could fall behind the venues; v3: the feed's stale window contradicted its posting
+policy, and leverage up to 25x).
 
 ## Why Monad
 
@@ -136,8 +140,10 @@ Vite + React + TypeScript + viem.
 | T6, T9, T11–T13 | Bad data reverts. Feed bounds and median. Price windows. Vault capacity. Two-step fills (only the first print fills; no gas limit can turn a fill into a refund). |
 | Backend, front-end | Intent tests for the relayer, keeper and Hermes client (the API key is never forwarded on a redirect), path traversal, the chart arithmetic and receipt decoding. |
 
-Every test states the bug it would catch, and protections were mutation-checked: each one was removed and a
-test had to fail. CI runs all of it ([.github/workflows/test.yml](.github/workflows/test.yml)).
+Every test states the bug it would catch. [script/mutation-check.sh](script/mutation-check.sh) breaks 11
+protections one at a time and requires the suite to fail each time (11 of 11 caught). The CI workflow
+([.github/workflows/test.yml](.github/workflows/test.yml)) runs all of it; its runs are currently not starting
+because of a billing lock on the GitHub account, not because of test failures.
 
 ## Run it yourself
 
@@ -182,7 +188,11 @@ forge clean && forge script script/Deploy.s.sol --rpc-url $MONAD_TESTNET_RPC --b
   value is public in the feed's events. So the relayer is accountable, not trustless: it can misreport within
   the bounds, but not hide that it did. The owner can pause new opens and rotate the relayer, and nothing more.
 - **Freshness of `c`.** Between posts (on a 0.25%-a-year move or hourly while positions are open), `c` stays at its last value,
-  and a post never re-prices the past. With no positions the relayer does not post.
+  and a post never re-prices the past. With no positions the relayer does not post. After 75 minutes without a
+  post the feed counts as stale and new commits are refused; closes and liquidations never wait for the feed.
+- **Leverage and gaps.** Up to 25x: a 25x position is liquidated after a move of about 2%. Liquidations use a
+  price at most 3 seconds old; a move larger than a position's remaining margin before it is liquidated is a
+  shortfall the vault absorbs (emitted as an event).
 - **Capacity can be occupied.** A hedged pair of accounts fills capacity without funding cost; the 10 BTC
   per-account cap makes that take many funded addresses, and a borrow fee (not implemented) would make it
   cost money over time.
@@ -220,7 +230,8 @@ The author published two repositories before the event (both created 2026-09-03)
 - [exchange-guardrails](https://github.com/dylantlwu/exchange-guardrails) encodes production incidents as types.
   The same idea, applied to margins, became `MarginStatic` and `MarginDynamic` here.
 
-Everything in this repository was written during the event; the commit history starts on 2026-09-28.
+Everything in this repository was written during the event. It was developed in a local git repository from
+2026-09-28 and published to GitHub on 2026-10-05, with that commit history unchanged.
 
 ## AI disclosure
 

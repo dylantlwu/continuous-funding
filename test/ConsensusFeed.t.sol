@@ -146,7 +146,7 @@ contract ConsensusFeedTest is Test {
     function test_staleAfterThreshold() public {
         assertTrue(feed.isStale(0)); // never posted
         _post(APR_1PCT, uint64(block.timestamp));
-        vm.warp(block.timestamp + 300);
+        vm.warp(block.timestamp + TestParams.STALE_AFTER);
         assertFalse(feed.isStale(0));
         vm.warp(block.timestamp + 1);
         assertTrue(feed.isStale(0));

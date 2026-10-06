@@ -231,7 +231,7 @@ contract TradingTest is Test {
     function test_T6_globalProblemsBlockOpensOnly() public {
         _open(traders[0], 1e18, 10_050e6);
         _open(traders[1], 1e18, 10_050e6);
-        vm.warp(block.timestamp + 301); // feed stale
+        vm.warp(block.timestamp + TestParams.STALE_AFTER + 1); // feed stale
         _price(P0, 0);
         assertTrue(feed.isStale(0));
         vm.expectRevert(PerpEngine.FeedStale.selector);
@@ -245,6 +245,20 @@ contract TradingTest is Test {
         vm.prank(keeper);
         eng.liquidate(traders[1], none); // liquidation still works
         assertEq(eng.longOI(), 0);
+    }
+
+    // Without this, a trader could commit in the last second before the feed goes stale and, if the print went
+    // against them, settle it themselves while the feed is stale to be refunded in full: a free option on the
+    // vault. A commit needs a fresh feed; the fill does not.
+    function test_anOrderCommittedOnAFreshFeedFillsAfterTheFeedGoesStale() public {
+        vm.warp(feed.lastPostTime(0) + TestParams.STALE_AFTER); // the last second the feed is fresh
+        assertFalse(feed.isStale(0));
+        _commitOpen(traders[0], 1e18, 10_050e6);
+        vm.warp(block.timestamp + DELAY);
+        assertTrue(feed.isStale(0));
+        _price(P0, 0);
+        _settle(traders[0]);
+        assertEq(_size(traders[0]), 1e18, "filled, not refunded");
     }
 
     // Without this, an open could be priced off a wide-confidence (uncertain) print, or a bad fill would
@@ -378,7 +392,8 @@ contract TradingTest is Test {
     // to the fill: an adverse print gets the order rejected and fully refunded, a favourable one fills. A margin
     // shortfall now keeps the open fee; a rejection the trader cannot cause (here, a pause) still refunds all.
     function test_marginShortfallRejectionKeepsTheFee() public {
-        _commitOpen(traders[0], 1e18, 10_050e6); // exactly 10x margin + fee at 100,000
+        uint256 margin = 100_000e6 * eng.initialMarginRate() / 1e18 + 50e6; // exactly max leverage + fee at 100,000
+        _commitOpen(traders[0], 1e18, margin);
         _price(101_000e18, 0); // the print moves 1% against the long
         uint256 b0 = _bal(traders[0]);
         uint256 v0 = _vault();
@@ -392,7 +407,7 @@ contract TradingTest is Test {
             }
         }
         assertEq(kept, 50.5e6, "the open fee at the fill price (5 bp of 101,000)");
-        assertEq(_bal(traders[0]) - b0, 10_050e6 - 50.5e6, "the rest is refunded");
+        assertEq(_bal(traders[0]) - b0, margin - 50.5e6, "the rest is refunded");
         assertEq(_vault() - v0, 50.5e6, "the vault keeps the fee");
         assertEq(_size(traders[0]), 0);
         assertEq(Usdc.unwrap(eng.escrowCash()), 0);
@@ -445,7 +460,7 @@ contract TradingTest is Test {
         int256 cPct
     ) public {
         sizeMilli = bound(sizeMilli, 1, 10_000); // 0.001 to 10 BTC (the per-account cap)
-        lev = bound(lev, 1, 10);
+        lev = bound(lev, 1, 1e18 / eng.initialMarginRate()); // up to the deployed maximum (25x)
         moveBp = bound(moveBp, -3000, 3000);
         confBp = bound(confBp, 0, 200);
         elapsed = bound(elapsed, 0, 30 days);
@@ -470,7 +485,7 @@ contract TradingTest is Test {
         int256 equity36 = int256(_deposit(traders[0])) * 1e30 + size * (int256(pf) - int256(entryPrice)) - size
             * (indexNow - entryIndex);
         uint256 absSize = uint256(size > 0 ? size : -size);
-        int256 maint36 = int256(absSize * pf / 1e18) * 0.05e18; // |size| x pf is exact for these inputs
+        int256 maint36 = int256(absSize * pf / 1e18) * int256(eng.maintenanceMarginRate()); // |size| x pf is exact here
 
         if (equity36 >= maint36) {
             vm.expectPartialRevert(PerpEngine.NotLiquidatable.selector);
@@ -487,10 +502,11 @@ contract TradingTest is Test {
     // T5 at the exact boundary. Without this, rounding the maintenance requirement UP to a whole
     // micro-USDC (the "against the trader" default) would liquidate a position whose equity equals its
     // maintenance margin exactly; random fuzzing almost never lands on this boundary, so it is pinned here.
-    // Numbers from: P = 20 (E - D) / 19 for a 1 BTC long, so equity == 5% of notional to the wei.
+    // Numbers from: P = 50 (E - D) / 49 for a 1 BTC long, so equity == 2% of notional (the maintenance rate) to the wei.
     function test_T5_exactBoundaryIsNotLiquidated() public {
-        uint256 entry = 100_000e18 + 4; // odd wei: maintenance is not a whole micro-USDC
-        uint256 boundary = 94_735_789_473_684_210_526_320;
+        uint256 entry = 100_000e18 + 14; // odd wei: maintenance is not a whole micro-USDC
+        uint256 boundary = 91_835_714_285_714_285_714_300;
+        assertEq(eng.maintenanceMarginRate(), 0.02e18, "the numbers below are for a 2% maintenance rate");
         _price(entry, 0);
         _open(traders[0], 1e18, 10_001e6 + 50e6 + 1); // deposit 10,001 after the rounded-up fee
         assertEq(_deposit(traders[0]), 10_001e6);
@@ -498,8 +514,8 @@ contract TradingTest is Test {
         vm.expectRevert(
             abi.encodeWithSelector(
                 PerpEngine.NotLiquidatable.selector,
-                UsdWad.wrap(4_736_789_473_684_210_526_316),
-                MarginDynamic.wrap(4_736_789_473)
+                UsdWad.wrap(1_836_714_285_714_285_714_286),
+                MarginDynamic.wrap(1_836_714_285)
             )
         );
         eng.liquidate(traders[0], none);

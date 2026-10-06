@@ -215,7 +215,7 @@ contract PerpEngine is ReentrancyGuard {
                 if (reason.length == 0) revert SettlementOutOfGas();
                 // Margin is the trader's choice: committing too little and being refunded whenever the print
                 // moves against you would be a free option. That rejection keeps the open fee; rejections the
-                // trader cannot cause (pause, stale feed, vault capacity, oracle confidence) refund in full.
+                // trader cannot cause (pause, vault capacity, oracle confidence) refund in full.
                 Usdc kept = _isMarginShortfall(reason) ? _rejectionFee(o, price, conf) : Usdc.wrap(0);
                 vaultCash = vaultCash + kept;
                 usdc.safeTransfer(account, Usdc.unwrap(o.margin - kept));
@@ -244,7 +244,8 @@ contract PerpEngine is ReentrancyGuard {
     function executeOpen(address account, int256 size, Usdc margin, uint256 price, uint256 conf) external {
         if (msg.sender != address(this)) revert OnlySelf();
         if (opensPaused) revert OpensArePaused();
-        if (feed.isStale(feedMarket)) revert FeedStale();
+        // No feed check here: commitOpen required a fresh feed. Checking again at the fill would let a trader
+        // commit just before the feed goes stale and, if the print is bad, settle it while stale for a full refund.
         if (conf * WAD > price * maxOpenConfRate) revert ConfidenceTooWide(price, conf);
 
         uint256 exec = _execPrice(price, conf, size > 0);

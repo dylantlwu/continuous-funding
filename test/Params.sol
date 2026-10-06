@@ -12,6 +12,7 @@ library TestParams {
     int256 internal constant W = Config.W;
     int256 internal constant V = Config.V;
     int256 internal constant SLEW = Config.SLEW;
+    uint64 internal constant STALE_AFTER = Config.STALE_AFTER;
 
     function defaults() internal pure returns (PerpEngine.Params memory) {
         return Config.engineParams();

@@ -21,7 +21,9 @@ library Config {
     int256 internal constant C_MAX = 100 * APR_1PCT;
     int256 internal constant SLEW = (5 * APR_1PCT + 59) / 60; // per second, rounded up: 5% APR per minute, no per-post cap
     uint64 internal constant MAX_DELAY = 120; // a post's observation may be at most 2 minutes old
-    uint64 internal constant STALE_AFTER = 300; // no post for 5 minutes: opens pause
+    // No post for 75 minutes: opens pause (owner, 2026-10-06). While positions are open the relayer posts on a
+    // 0.25%-a-year move or hourly, so a live feed is never stale; v2's 5 minutes made it look dead between posts.
+    uint64 internal constant STALE_AFTER = 75 minutes;
 
     // vault
     uint256 internal constant VAULT_SEED = 1_000_000e6; // test USDC
@@ -33,8 +35,8 @@ library Config {
         p.stressMove = 0.25e18;
         p.minSize = 0.001e18;
         p.maxSize = 10e18; // per account (owner, 2026-10-05): one address cannot fill the vault's capacity
-        p.initialMarginRate = 0.1e18; // 10x
-        p.maintenanceMarginRate = 0.05e18;
+        p.initialMarginRate = 0.04e18; // 25x (owner, 2026-10-06; was 10x)
+        p.maintenanceMarginRate = 0.02e18; // was 5%
         p.tradeFeeRate = 0.0005e18; // 5 bp, provisional
         p.liquidationFeeRate = 0.005e18; // 0.5%, provisional
         p.maxOpenConfRate = 0.01e18;

@@ -96,7 +96,7 @@ policy, and leverage up to 25x).
   Pyth fetch, and estimates the path from fetching the price to sending the transaction (one fetch plus about
   seven calls, before inclusion): with Alchemy's Monad endpoint, 0.01 s per call and about 0.4 s (2026-10-06);
   on the public RPC it was 0.21 s per call and about 1.6 s.
-- **Funding re-evaluated every block.** Several Monad blocks share one second, so funding is accrued per second
+- **Funding re-evaluated in every block that touches the market.** Several Monad blocks share one second, so funding is accrued per second
   and `p` moves on the same clock.
 - **Built for how Monad charges gas.** Monad charges the gas **limit** and reprices cold state access, so every
   write sets its limit from the node's own estimate (plus 15% from the browser, 5% for the relayer's
@@ -152,8 +152,10 @@ Vite + React + TypeScript + viem.
 
 Every test states the bug it would catch. [script/mutation-check.sh](script/mutation-check.sh) breaks 12
 protections one at a time and requires the suite to fail each time (12 of 12 caught). The CI workflow
-([.github/workflows/test.yml](.github/workflows/test.yml)) runs all of it; its runs are currently not starting
-because of a billing lock on the GitHub account, not because of test failures.
+([.github/workflows/test.yml](.github/workflows/test.yml)) runs the format and compile-fail checks, the
+golden-vector check, and the Forge, front-end and Python tests (the mutation check and the indexer's tests run
+locally, as in [Run it yourself](#run-it-yourself)); its runs are currently not starting because of a billing
+lock on the GitHub account, not because of test failures.
 
 ## Run it yourself
 
@@ -220,6 +222,12 @@ with no testnet MON works, because the fork funds it locally. Nothing is sent to
 - **Vault solvency.** If the vault cannot pay a winning close, the close reverts rather than paying less. The
   capacity rule keeps that out of reach. There is no insurance fund and no auto-deleveraging; shortfalls are
   emitted as events.
+- **The vault's testnet P&L is negative, and that is expected.** On 2026-10-07 the activity strip shows
+  −$1,383.83. Almost all of it is one 2 BTC test long, opened by the author to create the imbalance shown in the
+  demo, that was held about 15 hours while BTC rose 1.1%: the trader made $1,869.50 on price and paid only
+  $4.27 of funding. The rest: two small trades (−$11.26 for the vault), funding received on all closes ($4.35,
+  including that $4.27), fees ($188.77) and the liquidated margin kept net of the keeper's reward ($303.81). Funding charges a crowded side over time; it does
+  not stop the counterparty losing a single trade, and over 15 hours `p` had barely started to build.
 - **Accrual price.** Funding between touches accrues at the price of the last touch; anyone can `poke` to
   refresh it.
 - **Testnet only.** Not audited. Test USDC has no value.

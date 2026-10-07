@@ -240,10 +240,13 @@ Trades also execute at the oracle price moved by its confidence interval **again
 **Bots use the latest price.** Liquidation and `poke` take the latest Pyth price: no older than the last
 price used, at most 3 seconds old (owner, 2026-10-03: liquidators get no wider window than traders).
 Liquidation checks health at the confidence-adjusted price in the trader's favour (long: price + conf,
-short: price − conf), so a wide-confidence wick cannot liquidate a healthy position. Measured from the deployed
-keeper's host: on the public RPC (2026-10-05) 0.21 s per RPC call and about 1.6 s from fetching the price to
-sending the transaction; on Alchemy's Monad endpoint (2026-10-06) 0.01 s per call and about 0.4 s. No liquidation
-has happened on testnet yet.
+short: price − conf), so a wide-confidence wick cannot liquidate a healthy position. The deployed keeper's
+latency probe measures each RPC call and the Pyth fetch on its host, and estimates the path from fetching the
+price to sending the transaction (one fetch plus about seven calls, before inclusion): on the public RPC
+(2026-10-05) 0.21 s per call and about 1.6 s; on Alchemy's Monad endpoint (2026-10-06) 0.01 s per call and about
+0.4 s. The first testnet liquidation happened on 2026-10-07: the keeper liquidated a 25x test long in the block one
+second after the first Pyth print below its line
+([tx](https://testnet.monadvision.com/tx/0x23e85ca13478266450ffb277f408cf4fbb507eec8173386c797f9621a2f57935)).
 
 **Why Monad.** Two-step settlement is standard; what Monad changes is how it feels. A commit lands in
 about a second and the keeper can settle about a second after the fill time, so a trade fills a few

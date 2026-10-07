@@ -256,13 +256,22 @@ Continuous funding is not new, and this project does not claim it is.
 
 - [Synthetix SIP-279](https://sips.synthetix.io/sips/sip-279/): the velocity model `p` follows.
 - [Perpl](https://docs.perpl.xyz/exchange/funding) on Monad: cumulative funding index with lazy settlement.
-- GMX V2: adaptive per-second funding.
+- [GMX V2](https://docs.gmx.io/docs/trading/fees/): adaptive per-second funding. On Arbitrum a keeper reads recent
+  funding from external venues (Hyperliquid, Coinbase, Binance, OKX, Bybit, Trade.xyz) to set the funding
+  ceilings and how fast the rate moves; here the cross-venue median sets the level itself.
+- On Monad, [Drake](https://docs.drake.exchange/trading/fees/funding-fee) (vault counterparty, funding from the
+  live open-interest imbalance, accrued per second and recomputed whenever a position is touched) and
+  [LeverUp](https://docs.leverup.xyz/fees/holding-and-funding) (a cubic imbalance curve, accrued per second) already
+  charge imbalance-driven funding continuously, without an external reference;
+  [Monday Trade](https://docs.monday.trade/perps-trading/perps-funding-rate) also calls its premium-based funding
+  "continuous funding".
 - Synthetix v3: delayed (two-step) orders settled at a later oracle price.
 - Pyth: `parsePriceFeedUpdatesUnique`, the first-print proof.
 - dYdX, Hyperliquid and Binance: how venues compute and settle funding, studied in [validation/](validation/).
 
-What is specific here: the bounded combination of a cross-venue anchor and an imbalance premium for a
-vault-backed perp; the correctness design (types, rounding by which mistake must be impossible, two-step fills
+Per-second accrual is not the claim. What is specific here: the bounded combination of a cross-venue anchor
+that sets the level and an imbalance premium with memory for a vault-backed perp, with the anchor published as a
+feed other perps can read; the correctness design (types, rounding by which mistake must be impossible, two-step fills
 at a proven first print); and running it on Monad.
 
 ## Prior work

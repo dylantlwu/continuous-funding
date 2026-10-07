@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { usd } from "../funding";
+import { REPO } from "../chain";
 
 // The Envio HyperIndex deployment of indexer/ (public GraphQL). Totals come from the indexer; vault cash comes from
 // the chain read the page already does, so the vault's P&L shown is vault cash minus what was seeded net of withdrawals.
@@ -54,6 +55,12 @@ export function ActivityStrip({ vaultCash }: { vaultCash: bigint | null }) {
           <div key={k || "loading"}><div className="v mono">{v}</div><div className="k">{k}</div></div>
         ))}
       </div>
+      {s && vaultCash != null && vaultPnl(vaultCash, s) < 0 && (
+        <div className="muted" style={{ fontSize: 12, marginTop: 8 }}>
+          The vault is the counterparty, so it loses when traders win: funding charges a crowded side over time, it does
+          not stop a single losing trade. <a href={`${REPO}#trust-model-and-known-limits`} target="_blank" rel="noreferrer">Where the vault's P&L comes from</a>
+        </div>
+      )}
     </section>
   );
 }

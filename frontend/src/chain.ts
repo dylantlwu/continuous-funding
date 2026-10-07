@@ -22,6 +22,7 @@ import type { ChainConfig } from "./api";
 
 export const EXPLORER = "https://testnet.monadvision.com"; // Sourcify-verified sources show here (docs.monad.xyz)
 export const FAUCET = "https://faucet.monad.xyz"; // docs.monad.xyz/developer-essentials/testnets
+export const REPO = "https://github.com/dylantlwu/continuous-funding";
 /** Below this a trade's transactions may not be affordable (a commit is about 0.03 MON at Monad's 100 gwei floor). */
 export const MIN_MON = 5n * 10n ** 16n;
 export const chain = monadTestnet;

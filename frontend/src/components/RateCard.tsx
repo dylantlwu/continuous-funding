@@ -79,6 +79,9 @@ export function RateCard({ market, consensus, price, samples }: {
           <div className="needle" style={{ left: `calc(${needle}% - 1px)` }} />
         </div>
         <div className="band-l"><span>−5% shorts pay</span><span>skew {skewBtc >= 0 ? "+" : ""}{skewBtc.toFixed(3)} BTC</span><span>+5% longs pay</span></div>
+        <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>
+          p has memory: the skew sets how fast p moves, not where it is, so a small opposite skew turns it slowly.
+        </div>
         <PHistory samples={samples} />
 
         <div className="eyebrow" style={{ marginTop: 18 }}>live predicted funding, off-chain</div>

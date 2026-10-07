@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Address } from "viem";
 import { api, pythConf, pythPrice, pythWad, type ChainConfig, type Consensus, type MarketSample, type PythPrint } from "./api";
-import { EXPLORER, FAUCET, client, connect, existingAccount, explain, readAll, type Market, type Mine } from "./chain";
+import { EXPLORER, FAUCET, REPO, client, connect, existingAccount, explain, readAll, type Market, type Mine } from "./chain";
 import { CadenceChart } from "./components/CadenceChart";
 import { ActivityStrip } from "./components/ActivityStrip";
 import { PositionCard } from "./components/PositionCard";
@@ -9,7 +9,6 @@ import { RateCard } from "./components/RateCard";
 import { Ticket } from "./components/Ticket";
 import { cStatus, type RatePoint } from "./funding";
 
-const REPO = "https://github.com/dylantlwu/continuous-funding";
 
 export function App() {
   const [cfg, setCfg] = useState<ChainConfig | null>(null);

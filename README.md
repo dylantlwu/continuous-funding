@@ -7,6 +7,8 @@ in every block that touches the market and accrued per second. Orders fill at th
 2 seconds after they are committed, so no one, trader or settler, chooses the price.
 
 **Live on Monad testnet:** https://continuous-funding.up.railway.app
+**Demo video (2:44):** https://youtu.be/KaSGbcB9P0s · with [Chainlink CRE](https://youtu.be/u-WPm42MuAA) (1:09) ·
+[Envio](https://youtu.be/ULtT4qeI4CQ) (43 s) · [Alchemy](https://youtu.be/zehgDFu1fRs) (51 s)
 Monad Metropolis · Track 01 Onchain Finance & Trading · testnet only · not audited
 
 - [What it is](#what-it-is) · [Try it](#try-it) · [Why Monad](#why-monad) · [Architecture](#architecture)

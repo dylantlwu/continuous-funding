@@ -92,7 +92,7 @@ export function App() {
           <span className="tag">BTC-PERP · Monad testnet</span>
         </div>
         <div className="live">
-          <span style={{ whiteSpace: "nowrap" }} title="c on chain: its age, and its gap to the live five-venue median. While positions are open the keeper posts when the gap reaches 0.25% a year, or hourly.">
+          <span style={{ whiteSpace: "nowrap" }} title="c on chain: its age, and its gap to the live five-venue median. The keeper posts when the gap reaches 0.25% a year, or hourly.">
             <span className={`dot ${cBadge?.due ? "stale" : ""}`} />{cBadge ? cBadge.text : "connecting…"}
           </span>
           <span>BTC {price ? `$${price.toLocaleString("en-US", { maximumFractionDigits: 2 })}` : "—"}</span>
@@ -166,7 +166,7 @@ export function App() {
               const maxLev = Math.round(1e18 / Number(cfg.initialMarginRate)), mmr = Number(cfg.maintenanceMarginRate) / 1e16;
               return <li>Up to {maxLev}x, isolated margin. A {maxLev}x position is liquidated after a move of about {100 / maxLev - mmr}% against it (maintenance margin {mmr}%).</li>;
             })()}
-            <li>c is posted on-chain while positions are open whenever the live median moves 0.25% a year from it, or at least hourly, and before an open if it is over 70 minutes old; between posts it stays at its last value and open positions accrue at it. A post never re-prices the past.</li>
+            <li>c is posted on-chain whenever the live median moves 0.25% a year from it, or at least hourly, and before an open if it is over 70 minutes old; between posts it stays at its last value and open positions accrue at it. A post never re-prices the past.</li>
             <li>One relayer key reports the five venue rates; the contract takes the median and limits c to ±100% a year, moving at most 5% a year per minute. Every reported value is public in the feed's events.</li>
             <li>Opens are refused when the vault could not survive a 25% move against the larger side. If the vault cannot pay a winning close, the close reverts rather than paying less.</li>
             <li>Need gas? <a href={FAUCET} target="_blank" rel="noreferrer">Monad testnet faucet</a>.</li>

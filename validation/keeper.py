@@ -39,7 +39,7 @@ def _account(log):
 
 class Keeper:
     def __init__(self, chain, engine, db, post_if_needed, start_block, grace_s=0, log=None,
-                 heartbeat_s=POST_HEARTBEAT_S, move_wad=POST_MOVE_WAD, sample_every_s=300):
+                 heartbeat_s=POST_HEARTBEAT_S, move_wad=POST_MOVE_WAD, sample_every_s=300, post_when_empty=False):
         self.chain, self.engine, self.db, self.post_if_needed = chain, engine, db, post_if_needed
         self.log = log or (lambda *a: print(*a, flush=True))  # unbuffered: a keeper action must show at once
         self.grace_s = grace_s
@@ -56,6 +56,7 @@ class Keeper:
         self.pending = {}  # account -> fill time (commitTime + settleDelay)
         self._last_liq = 0.0
         self.heartbeat_s, self.move_wad, self.sample_every_s = heartbeat_s, move_wad, sample_every_s
+        self.post_when_empty = post_when_empty  # other perps read c: keep it fresh even when this book is empty
         self._last_post_check = 0.0
         self._last_sample = 0.0
         db.execute("CREATE TABLE IF NOT EXISTS market_samples(engine TEXT, ts INTEGER, block INTEGER, c TEXT, p TEXT, "
@@ -164,13 +165,14 @@ class Keeper:
 
     def keep_c_fresh(self):
         """While anything accrues or waits to fill, post c once the median is `move_wad` away from it or c is
-        `heartbeat_s` old; never when the book is empty (nothing accrues, and every post is charged at its gas
-        limit). Checked every 30 s; the recorder reads the venues every minute."""
+        `heartbeat_s` old. When the book is empty nothing here accrues, so it posts only if `post_when_empty` is set
+        (other perps read the feed; every post is charged at its gas limit). Checked every 30 s; the recorder reads
+        the venues every minute."""
         if time.time() - self._last_post_check < 30:
             return None
         self._last_post_check = time.time()
         long_oi, short_oi = self._open_interest()
-        if long_oi + short_oi == 0 and not self.pending:
+        if long_oi + short_oi == 0 and not self.pending and not self.post_when_empty:
             return None
         return self.post_if_needed(min_age_s=self.heartbeat_s - 5, move_wad=self.move_wad)
 

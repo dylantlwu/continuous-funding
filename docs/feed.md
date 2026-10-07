@@ -98,10 +98,9 @@ serves at most 100 blocks per `eth_getLogs` query.
 - **One relayer key** reports the venue values. It is accountable, not trustless: it can misreport within the
   bounds above, but every value it reports is public and attributable. The owner can pause posting and
   rotate the relayer.
-- **When it posts.** Today the relayer posts while Continuous Funding has open positions: whenever the median
-  moves 0.25% a year from the on-chain `c`, and at least hourly. With no open positions it does not post,
-  and the feed goes stale after 75 minutes. A market relying on the feed needs the hourly heartbeat to run
-  regardless of our book; that is a configuration change, not a contract change.
+- **When it posts.** Since 2026-10-07 the relayer posts whether or not Continuous Funding has open positions
+  (`KEEPER_POST_WHEN_EMPTY=1`): whenever the median moves 0.25% a year from the on-chain `c`, and at least hourly,
+  so a reader should not see it go stale (75 minutes) unless the relayer is down.
 - **Testnet only, not audited.**
 
 ## Next

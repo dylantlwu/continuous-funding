@@ -346,6 +346,15 @@ class KeeperSettlement(unittest.TestCase):
         self.assertEqual(posts, [(3595, keeper.POST_MOVE_WAD)],
                          "positions open: post on a 0.25%-a-year move, or when c is about an hour old")
 
+    # Without this, a perp that reads the feed would see c go stale whenever this market's own book is empty.
+    def test_posts_c_on_an_empty_book_when_other_readers_need_it(self):
+        k, c, posts = self.make((0, 0, 0, False), ts=1_100)
+        k.pending.clear()
+        k.post_when_empty = True
+        c.answers.update({"longOI()": (0,), "shortOI()": (0,)})
+        k.keep_c_fresh()
+        self.assertEqual(posts, [(3595, keeper.POST_MOVE_WAD)], "same move-or-hourly rule as with positions open")
+
     # Without this, a market sample labelled with block N would hold values read a moment later at "latest" (seen
     # live: p off by 4,404 wei a second, about 2 s of drift), so re-reading block N on chain would not match it.
     def test_market_samples_are_read_at_the_block_they_are_labelled_with(self):

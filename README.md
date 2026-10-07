@@ -32,7 +32,7 @@ This project anchors to the market and adds a bounded, memoryful premium:
 
 | Term | What it is | How it moves |
 |---|---|---|
-| `c` | Median of Binance, OKX, Bybit, Hyperliquid and Bitget predicted funding, normalised to per second. The median is computed on chain from the five reported values. | Limited to ±100% a year and to 5% a year per minute of change, measured over time: one post after a quiet spell catches up as far as the elapsed time allows. Posted before an open, and while positions are open whenever the median moves 0.25% a year from it, or at least hourly. |
+| `c` | Median of Binance, OKX, Bybit, Hyperliquid and Bitget predicted funding, normalised to per second. The median is computed on chain from the five reported values. | Limited to ±100% a year and to 5% a year per minute of change, measured over time: one post after a quiet spell catches up as far as the elapsed time allows. Posted whenever the median moves 0.25% a year from it, or at least hourly, and before an open if it is old. |
 | `p` | This market's own imbalance premium. | `dp/dt = 2% a year per hour × clamp(skew / 40 BTC, ±1)`, bounded to ±5% a year. It keeps moving while the imbalance lasts. |
 
 While one side dominates, `p` makes that side pay more and the other side earn more. That pays hedgers to
@@ -188,6 +188,7 @@ forge clean && forge script script/Deploy.s.sol --rpc-url $MONAD_TESTNET_RPC --b
 | `PERP_ENGINE` | Engine address; everything else is read from chain |
 | `MONAD_RPC` | RPC URL. The deployed backend uses [Alchemy](https://www.alchemy.com)'s Monad testnet endpoint |
 | `KEEPER_LOG_PAGE` | Blocks per `eth_getLogs` scan: 100 on the public RPC (default), 1,000 on Alchemy |
+| `KEEPER_POST_WHEN_EMPTY` | `1` keeps posting `c` (on a move or hourly) when this market has no positions, for other readers of the feed; unset by default |
 | `PRIVATE_KEY` | Must be the feed's relayer |
 | `PYTH_API_KEY` | Hermes key; it stays on the server |
 | `PUBLIC_API_ONLY=1` | Serve only the front-end and its API |
@@ -208,7 +209,7 @@ with no testnet MON works, because the fork funds it locally. Nothing is sent to
   testnet in CRE simulation through Chainlink's MockKeystoneForwarder (for example
   [`0x528c9c81…`](https://testnet.monadvision.com/tx/0x528c9c816e2dd02f518482b1e0c92ad93b1038af283d45a330be619dff122984));
   a production DON deployment is not done, and the market still reads the Python relayer's feed.
-- **Freshness of `c`.** Between posts (on a 0.25%-a-year move or hourly while positions are open), `c` stays at its last value,
+- **Freshness of `c`.** Between posts (on a 0.25%-a-year move, or hourly), `c` stays at its last value,
   and a post never re-prices the past. With no positions the relayer does not post. After 75 minutes without a
   post the feed counts as stale and new commits are refused; closes and liquidations never wait for the feed.
 - **Leverage and gaps.** Up to 25x: a 25x position is liquidated after a move of about 2%. Liquidations use a
@@ -237,8 +238,8 @@ with no testnet MON works, because the fork funds it locally. Nothing is sent to
 - **The feed, for other Monad perps.** `c` is useful beyond this market: any vault-backed perp can anchor its
   own funding to it and keep charging its own imbalance premium on top. [docs/feed.md](docs/feed.md) shows the
   one-line read, exact accrual across posts, the on-chain bounds and how to check every reported value; the
-  example there is compiled and tested. Running the hourly heartbeat independently of this market's book is
-  a configuration change.
+  example there is compiled and tested. Since 2026-10-07 the relayer keeps `c` fresh whether or not this
+  market has positions, so another market can read it today.
 - **Fewer trusted parties.** Move the market onto the CRE edition of the feed once the workflow runs on a production
   DON, instead of one relayer key; separate keys for the owner, the relayer and the keeper.
 - **The vault.** LP shares with a withdrawal rule that cannot front-run realised losses; a borrow fee on open

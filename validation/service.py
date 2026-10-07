@@ -219,7 +219,8 @@ def keeper_loop():
                       start_block=int(os.environ.get("ENGINE_START_BLOCK", "0")),
                       grace_s=int(os.environ.get("KEEPER_GRACE_S", "0")),
                       heartbeat_s=int(os.environ.get("KEEPER_HEARTBEAT_S", keeper.POST_HEARTBEAT_S)),
-                      sample_every_s=int(os.environ.get("KEEPER_SAMPLE_S", "300")))
+                      sample_every_s=int(os.environ.get("KEEPER_SAMPLE_S", "300")),
+                      post_when_empty=os.environ.get("KEEPER_POST_WHEN_EMPTY") == "1")
     k.run()
 
 

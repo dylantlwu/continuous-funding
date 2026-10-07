@@ -232,6 +232,10 @@ with no testnet MON works, because the fork funds it locally. Nothing is sent to
   DON, instead of one relayer key; separate keys for the owner, the relayer and the keeper.
 - **The vault.** LP shares with a withdrawal rule that cannot front-run realised losses; a borrow fee on open
   interest so that occupying capacity costs money; an audit before any mainnet value.
+- **Beyond crypto.** The same split carries to other assets: `c` becomes the asset's own carry and `p` is unchanged.
+  For a stock, `c` is the USD short rate minus the expected dividend yield, and each dividend is paid from shorts
+  to longs on the ex-date. Because `c` does not need a live price, funding keeps a defined anchor while the
+  underlying market is closed. Not built here.
 
 ## Prior art
 

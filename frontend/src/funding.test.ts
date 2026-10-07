@@ -102,3 +102,15 @@ describe("p sparkline range", () => {
     expect(hi - lo).toBeGreaterThan(0);
   });
 });
+
+import { vaultPnl } from "./components/ActivityStrip";
+describe("activity strip: vault P&L", () => {
+  // Without this, the strip could show vault cash itself (1,000,000-ish) or count the owner's seeding as profit:
+  // P&L must be vault cash on chain minus what was seeded net of withdrawals, in USDC.
+  it("is vault cash minus net seeding", () => {
+    const s = { traders: 0, fills: 0, closes: 0, liquidations: 0, rejections: 0, volumeUsd: "0", feesUsdc: "0",
+      vaultSeeded: "1000000000000", vaultWithdrawn: "0" };
+    expect(vaultPnl(998_312_357_404n, s)).toBeCloseTo(-1687.642596, 6);
+    expect(vaultPnl(1_000_100_000_000n, { ...s, vaultWithdrawn: "200000000" })).toBeCloseTo(300, 6);
+  });
+});

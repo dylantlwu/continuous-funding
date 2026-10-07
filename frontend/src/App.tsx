@@ -3,6 +3,7 @@ import type { Address } from "viem";
 import { api, pythConf, pythPrice, pythWad, type ChainConfig, type Consensus, type MarketSample, type PythPrint } from "./api";
 import { EXPLORER, FAUCET, client, connect, existingAccount, explain, readAll, type Market, type Mine } from "./chain";
 import { CadenceChart } from "./components/CadenceChart";
+import { ActivityStrip } from "./components/ActivityStrip";
 import { PositionCard } from "./components/PositionCard";
 import { RateCard } from "./components/RateCard";
 import { Ticket } from "./components/Ticket";
@@ -136,6 +137,8 @@ export function App() {
         <Ticket cfg={cfg} account={account} mine={mine} price={price} conf={conf} onConnect={onConnect} busy={busy} setBusy={setBusy} />
         <PositionCard cfg={cfg} account={account} mine={mine} price={price} block={market?.block ?? null} busy={busy} setBusy={setBusy} />
       </div>
+
+      <ActivityStrip vaultCash={market?.vaultCash ?? null} />
 
       <section className="how reveal d5">
         <div>

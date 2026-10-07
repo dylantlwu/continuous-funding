@@ -126,7 +126,7 @@ policy, and leverage up to 25x).
 | `Units`, `Margin` | [src/lib/Units.sol](src/lib/Units.sol) | Value types (`Usdc`, `UsdWad`, `MarginStatic`, `MarginDynamic`) and the only two places margins meet |
 | `ConsensusFeed` | [src/ConsensusFeed.sol](src/ConsensusFeed.sol) | Takes five venue rates, computes the median, clamps it, keeps its time integral |
 | `IFundingFeed` | [src/interfaces/IFundingFeed.sol](src/interfaces/IFundingFeed.sol) | The feed's read side, for other markets that anchor to `c` ([docs/feed.md](docs/feed.md)) |
-| Indexer | [indexer/](indexer/) | [Envio](https://envio.dev) HyperIndex: activity totals, every trade, the market's funding record and every feed post |
+| Indexer | [indexer/](indexer/) | [Envio](https://envio.dev) HyperIndex: activity totals, every trade, the market's funding record and every feed post. Deployed on Envio's hosted service; the page's activity strip reads its [public GraphQL endpoint](https://indexer.dev.hyperindex.xyz/246512b/v1/graphql) |
 | CRE workflow | [cre/](cre/), [src/cre/CreFeedReceiver.sol](src/cre/CreFeedReceiver.sol) | The relayer as a [Chainlink CRE](https://docs.chain.link/cre) workflow: every node of a DON reads the five venues, the nodes agree on each value, and the signed report reaches a ConsensusFeed through Chainlink's forwarder |
 | `PythPriceSource` | [src/PythPriceSource.sol](src/PythPriceSource.sol) | Pyth adapter: the latest price, or the first print at or after a time |
 | Front-end | [frontend/](frontend/) | The page above; ABI generated from the build output |

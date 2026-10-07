@@ -92,9 +92,10 @@ policy, and leverage up to 25x).
   fills it a few seconds later, with one wallet confirmation. With 2-second blocks the same flow takes several blocks; with
   12-second blocks it is unusable for active trading.
 - **Liquidations on a 3-second price.** Liquidations and pokes must use a Pyth price at most 3 seconds old, and
-  never older than the last price used. Measured by the keeper's latency probe on its host: with Alchemy's
-  Monad endpoint, 0.01 s per RPC call and about 0.4 s from fetching the price to sending the transaction
-  (2026-10-06); on the public RPC it was 0.21 s per call and about 1.6 s.
+  never older than the last price used. The keeper's latency probe on its host measures each RPC call and the
+  Pyth fetch, and estimates the path from fetching the price to sending the transaction (one fetch plus about
+  seven calls, before inclusion): with Alchemy's Monad endpoint, 0.01 s per call and about 0.4 s (2026-10-06);
+  on the public RPC it was 0.21 s per call and about 1.6 s.
 - **Funding re-evaluated every block.** Several Monad blocks share one second, so funding is accrued per second
   and `p` moves on the same clock.
 - **Built for how Monad charges gas.** Monad charges the gas **limit** and reprices cold state access, so every

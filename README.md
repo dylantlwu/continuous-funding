@@ -239,7 +239,8 @@ with no testnet MON works, because the fork funds it locally. Nothing is sent to
   own funding to it and keep charging its own imbalance premium on top. [docs/feed.md](docs/feed.md) shows the
   one-line read, exact accrual across posts, the on-chain bounds and how to check every reported value; the
   example there is compiled and tested. Since 2026-10-07 the relayer keeps `c` fresh whether or not this
-  market has positions, so another market can read it today.
+  market has positions, so another market can read it today. On 2026-10-07 we offered it to one Monad perp
+  venue as an anchor for its funding, with a week of shadow reading on testnet; no answer yet.
 - **Fewer trusted parties.** Move the market onto the CRE edition of the feed once the workflow runs on a production
   DON, instead of one relayer key; separate keys for the owner, the relayer and the keeper.
 - **The vault.** LP shares with a withdrawal rule that cannot front-run realised losses; a borrow fee on open
